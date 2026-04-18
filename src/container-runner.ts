@@ -3,6 +3,7 @@
  * Spawns agent execution in containers and handles IPC
  */
 import { ChildProcess, spawn } from 'child_process';
+import * as os from 'os';
 import fs from 'fs';
 import path from 'path';
 
@@ -135,6 +136,36 @@ function buildVolumeMounts(
     }
   }
 
+  // Mount container scripts (e.g. slack CLI) and add to PATH
+  const scriptsDir = path.join(process.cwd(), 'container', 'scripts');
+  if (fs.existsSync(scriptsDir)) {
+    mounts.push({
+      hostPath: scriptsDir,
+      containerPath: '/opt/nanoclaw/bin',
+      readonly: true,
+    });
+  }
+
+  // Mount Azure CLI credentials (read-only) so agents can use `az` commands
+  const azureDir = path.join(os.homedir(), '.azure');
+  if (fs.existsSync(azureDir)) {
+    mounts.push({
+      hostPath: azureDir,
+      containerPath: '/home/node/.azure',
+      readonly: true,
+    });
+  }
+
+  // Mount GitHub CLI credentials (read-only) so agents can use `gh` commands
+  const ghDir = path.join(os.homedir(), '.config', 'gh');
+  if (fs.existsSync(ghDir)) {
+    mounts.push({
+      hostPath: ghDir,
+      containerPath: '/home/node/.config/gh',
+      readonly: true,
+    });
+  }
+
   // Per-group Claude sessions directory (isolated from other groups)
   // Each group gets their own .claude/ to prevent cross-group session access
   const groupSessionsDir = path.join(
@@ -247,25 +278,66 @@ async function buildContainerArgs(
   mounts: VolumeMount[],
   containerName: string,
   agentIdentifier?: string,
+  chatJid?: string,
 ): Promise<string[]> {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
 
   // Pass host timezone so container's local time matches the user's
   args.push('-e', `TZ=${TIMEZONE}`);
 
-  // OneCLI gateway handles credential injection — containers never see real secrets.
-  // The gateway intercepts HTTPS traffic and injects API keys or OAuth tokens.
-  const onecliApplied = await onecli.applyContainerConfig(args, {
-    addHostMapping: false, // Nanoclaw already handles host gateway
-    agent: agentIdentifier,
-  });
-  if (onecliApplied) {
-    logger.info({ containerName }, 'OneCLI gateway config applied');
+  // Add NanoClaw scripts to PATH
+  args.push('-e', 'PATH=/opt/nanoclaw/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin');
+
+  // Forward API proxy settings when using a local proxy instead of direct API access.
+  // These env vars override the default api.anthropic.com endpoint inside the container.
+  for (const key of [
+    'ANTHROPIC_BASE_URL',
+    'ANTHROPIC_AUTH_TOKEN',
+    'ANTHROPIC_MODEL',
+    'ANTHROPIC_DEFAULT_SONNET_MODEL',
+    'ANTHROPIC_SMALL_FAST_MODEL',
+    'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+  ]) {
+    if (process.env[key]) {
+      args.push('-e', `${key}=${process.env[key]}`);
+    }
+  }
+
+  // When a local API proxy is configured (ANTHROPIC_BASE_URL), skip OneCLI gateway
+  // entirely — its HTTP_PROXY/HTTPS_PROXY injection would intercept and corrupt
+  // traffic to the local proxy endpoint.
+  if (process.env.ANTHROPIC_BASE_URL) {
+    logger.info({ containerName }, 'Local API proxy configured — skipping OneCLI gateway');
   } else {
-    logger.warn(
-      { containerName },
-      'OneCLI gateway not reachable — container will have no credentials',
-    );
+    // OneCLI gateway handles credential injection — containers never see real secrets.
+    // The gateway intercepts HTTPS traffic and injects API keys or OAuth tokens.
+    const onecliApplied = await onecli.applyContainerConfig(args, {
+      addHostMapping: false, // Nanoclaw already handles host gateway
+      agent: agentIdentifier,
+    });
+    if (onecliApplied) {
+      logger.info({ containerName }, 'OneCLI gateway config applied');
+    } else {
+      logger.warn(
+        { containerName },
+        'OneCLI gateway not reachable — container will have no credentials',
+      );
+    }
+  }
+
+  // Pass Slack credentials into the container so the agent can upload files directly.
+  if (chatJid?.startsWith('slack:') && process.env.SLACK_BOT_TOKEN) {
+    const channelId = chatJid.replace(/^slack:/, '');
+    args.push('-e', `SLACK_BOT_TOKEN=${process.env.SLACK_BOT_TOKEN}`);
+    args.push('-e', `SLACK_CHANNEL_ID=${channelId}`);
+  }
+
+  // Pass Feishu credentials into the container for direct API access.
+  if (chatJid?.startsWith('feishu:') && process.env.FEISHU_APP_ID) {
+    const feishuChatId = chatJid.replace(/^feishu:/, '');
+    args.push('-e', `FEISHU_APP_ID=${process.env.FEISHU_APP_ID}`);
+    args.push('-e', `FEISHU_APP_SECRET=${process.env.FEISHU_APP_SECRET}`);
+    args.push('-e', `FEISHU_CHAT_ID=${feishuChatId}`);
   }
 
   // Runtime-specific args for host gateway resolution
@@ -316,6 +388,7 @@ export async function runContainerAgent(
     mounts,
     containerName,
     agentIdentifier,
+    input.chatJid,
   );
 
   logger.debug(

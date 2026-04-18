@@ -1,0 +1,229 @@
+#!/bin/bash
+# Feishu CLI for NanoClaw container agents.
+# Usage: feishu <command> [args...]
+#
+# Requires FEISHU_APP_ID, FEISHU_APP_SECRET, and FEISHU_CHAT_ID env vars.
+
+set -euo pipefail
+
+APP_ID="${FEISHU_APP_ID:-}"
+APP_SECRET="${FEISHU_APP_SECRET:-}"
+CHAT_ID="${FEISHU_CHAT_ID:-}"
+
+if [ -z "$APP_ID" ] || [ -z "$APP_SECRET" ]; then
+  echo "Error: FEISHU_APP_ID and FEISHU_APP_SECRET not set (not a Feishu channel?)" >&2
+  exit 1
+fi
+
+# Get tenant access token
+get_token() {
+  local resp
+  resp=$(curl -s -X POST "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal" \
+    -H "Content-Type: application/json" \
+    -d "{\"app_id\":\"$APP_ID\",\"app_secret\":\"$APP_SECRET\"}")
+  echo "$resp" | python3 -c "import sys,json; print(json.load(sys.stdin).get('tenant_access_token',''))"
+}
+
+TOKEN=""
+ensure_token() {
+  if [ -z "$TOKEN" ]; then
+    TOKEN=$(get_token)
+    if [ -z "$TOKEN" ]; then
+      echo "Error: Failed to get Feishu access token" >&2
+      exit 1
+    fi
+  fi
+}
+
+api() {
+  local method="$1" endpoint="$2"; shift 2
+  ensure_token
+  curl -s -X "$method" "https://open.feishu.cn/open-apis$endpoint" \
+    -H "Authorization: Bearer $TOKEN" "$@"
+}
+
+check_ok() {
+  local resp="$1" action="$2"
+  local code
+  code=$(echo "$resp" | python3 -c "import sys,json; print(json.load(sys.stdin).get('code',1))" 2>/dev/null || echo "1")
+  if [ "$code" != "0" ]; then
+    local msg
+    msg=$(echo "$resp" | python3 -c "import sys,json; print(json.load(sys.stdin).get('msg','unknown error'))" 2>/dev/null || echo "$resp")
+    echo "Error: $action failed: $msg" >&2
+    return 1
+  fi
+}
+
+CMD="${1:-help}"; shift || true
+
+case "$CMD" in
+
+  ## --- Messaging ---
+
+  send)
+    # Send a text message. Usage: feishu send "text"
+    TEXT="$1"
+    PAYLOAD=$(python3 -c "
+import json
+print(json.dumps({
+    'receive_id': '$CHAT_ID',
+    'msg_type': 'text',
+    'content': json.dumps({'text': '''$TEXT'''})
+}))
+")
+    # Safer approach using stdin
+    CONTENT=$(printf '%s' "$TEXT" | python3 -c "import sys,json; print(json.dumps({'text': sys.stdin.read()}))")
+    PAYLOAD="{\"receive_id\":\"$CHAT_ID\",\"msg_type\":\"text\",\"content\":$(printf '%s' "$CONTENT" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')}"
+    RESP=$(api POST "/im/v1/messages?receive_id_type=chat_id" \
+      -H "Content-Type: application/json" -d "$PAYLOAD")
+    check_ok "$RESP" "send" || exit 1
+    MSG_ID=$(echo "$RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('data',{}).get('message_id',''))")
+    echo "Sent (message_id=$MSG_ID)"
+    ;;
+
+  reply)
+    # Reply to a message. Usage: feishu reply <message_id> "text"
+    MSG_ID="$1"; TEXT="$2"
+    CONTENT=$(printf '%s' "$TEXT" | python3 -c "import sys,json; print(json.dumps({'text': sys.stdin.read()}))")
+    PAYLOAD="{\"msg_type\":\"text\",\"content\":$(printf '%s' "$CONTENT" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')}"
+    RESP=$(api POST "/im/v1/messages/$MSG_ID/reply" \
+      -H "Content-Type: application/json" -d "$PAYLOAD")
+    check_ok "$RESP" "reply" || exit 1
+    echo "Replied"
+    ;;
+
+  delete)
+    # Delete a message. Usage: feishu delete <message_id>
+    MSG_ID="$1"
+    RESP=$(api DELETE "/im/v1/messages/$MSG_ID")
+    check_ok "$RESP" "delete" || exit 1
+    echo "Deleted"
+    ;;
+
+  ## --- Files ---
+
+  upload)
+    # Upload a file or image. Usage: feishu upload <file-path> [title]
+    FILE="$1"; TITLE="${2:-$(basename "$FILE")}"
+    if [ ! -f "$FILE" ]; then
+      echo "Error: File not found: $FILE" >&2; exit 1
+    fi
+    ensure_token
+
+    EXT=$(echo "${FILE##*.}" | tr '[:upper:]' '[:lower:]')
+    case "$EXT" in
+      png|jpg|jpeg|gif|bmp|webp)
+        # Upload as image
+        RESP=$(curl -s -X POST "https://open.feishu.cn/open-apis/im/v1/images" \
+          -H "Authorization: Bearer $TOKEN" \
+          -F "image_type=message" \
+          -F "image=@$FILE")
+        check_ok "$RESP" "upload image" || exit 1
+        IMAGE_KEY=$(echo "$RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('data',{}).get('image_key',''))")
+        # Send image message
+        PAYLOAD="{\"receive_id\":\"$CHAT_ID\",\"msg_type\":\"image\",\"content\":\"{\\\"image_key\\\":\\\"$IMAGE_KEY\\\"}\"}"
+        RESP=$(api POST "/im/v1/messages?receive_id_type=chat_id" \
+          -H "Content-Type: application/json" -d "$PAYLOAD")
+        check_ok "$RESP" "send image" || exit 1
+        echo "Uploaded image: $TITLE"
+        ;;
+      *)
+        # Upload as file
+        FILETYPE="stream"
+        case "$EXT" in
+          pdf) FILETYPE="pdf" ;;
+          doc|docx) FILETYPE="doc" ;;
+          xls|xlsx) FILETYPE="xls" ;;
+          ppt|pptx) FILETYPE="ppt" ;;
+          mp4|mp3) FILETYPE="mp4" ;;
+        esac
+        RESP=$(curl -s -X POST "https://open.feishu.cn/open-apis/im/v1/files" \
+          -H "Authorization: Bearer $TOKEN" \
+          -F "file_type=$FILETYPE" \
+          -F "file_name=$(basename "$FILE")" \
+          -F "file=@$FILE")
+        check_ok "$RESP" "upload file" || exit 1
+        FILE_KEY=$(echo "$RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('data',{}).get('file_key',''))")
+        # Send file message
+        PAYLOAD="{\"receive_id\":\"$CHAT_ID\",\"msg_type\":\"file\",\"content\":\"{\\\"file_key\\\":\\\"$FILE_KEY\\\"}\"}"
+        RESP=$(api POST "/im/v1/messages?receive_id_type=chat_id" \
+          -H "Content-Type: application/json" -d "$PAYLOAD")
+        check_ok "$RESP" "send file" || exit 1
+        echo "Uploaded file: $TITLE"
+        ;;
+    esac
+    ;;
+
+  ## --- Reactions ---
+
+  react)
+    # Add a reaction. Usage: feishu react <message_id> <emoji_type>
+    MSG_ID="$1"; EMOJI="$2"
+    RESP=$(api POST "/im/v1/messages/$MSG_ID/reactions" \
+      -H "Content-Type: application/json" \
+      -d "{\"reaction_type\":{\"emoji_type\":\"$EMOJI\"}}")
+    check_ok "$RESP" "react" || exit 1
+    echo "Reacted :$EMOJI:"
+    ;;
+
+  ## --- History ---
+
+  history)
+    # Read recent messages. Usage: feishu history [--limit N]
+    LIMIT=20
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --limit) LIMIT="$2"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    RESP=$(api GET "/im/v1/messages?container_id_type=chat&container_id=$CHAT_ID&page_size=$LIMIT")
+    check_ok "$RESP" "history" || exit 1
+    echo "$RESP" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+for m in reversed(data.get('data', {}).get('items', [])):
+    sender = m.get('sender', {}).get('id', '?')
+    msg_type = m.get('msg_type', '?')
+    msg_id = m.get('message_id', '')
+    body = m.get('body', {}).get('content', '')
+    try:
+        content = json.loads(body).get('text', body)[:200]
+    except:
+        content = body[:200]
+    print(f'[{msg_id}] {sender} ({msg_type}): {content}')
+"
+    ;;
+
+  ## --- Help ---
+
+  help|--help|-h)
+    cat <<'HELP'
+Feishu CLI for NanoClaw agents
+
+Messaging:
+  feishu send "text"                   Send a message
+  feishu reply <message_id> "text"     Reply to a message
+  feishu delete <message_id>           Delete a message
+
+Files:
+  feishu upload <file> [title]         Upload image/file to the chat
+
+Reactions:
+  feishu react <message_id> <emoji>    Add emoji reaction
+
+History:
+  feishu history [--limit N]           Read recent messages
+
+Environment:
+  FEISHU_APP_ID                        App ID (injected by NanoClaw)
+  FEISHU_APP_SECRET                    App Secret (injected by NanoClaw)
+  FEISHU_CHAT_ID                       Current chat (injected by NanoClaw)
+HELP
+    ;;
+
+  *)
+    echo "Unknown command: $CMD (run 'feishu help' for usage)" >&2
+    exit 1
+    ;;
+esac

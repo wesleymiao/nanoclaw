@@ -18,6 +18,16 @@ Your output is sent to the user or group.
 
 You also have `mcp__nanoclaw__send_message` which sends a message immediately while you're still working. This is useful when you want to acknowledge a request before starting longer work.
 
+### Progress Reporting
+
+When working on multi-step tasks, especially debugging or troubleshooting, use `send_message` to report key intermediate steps — not just the final result. Wesley wants visibility into:
+- What you're trying and why
+- What failed and what error you got
+- What alternative approach you're switching to
+- What finally worked
+
+This is especially important for trial-and-error processes where multiple attempts may be needed. Don't silently retry — report each significant attempt.
+
 ### Internal thoughts
 
 If part of your output is internal reasoning rather than something for the user, wrap it in `<internal>` tags:

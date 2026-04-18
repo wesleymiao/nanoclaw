@@ -1,7 +1,10 @@
 import { App, LogLevel } from '@slack/bolt';
 import type { GenericMessageEvent, BotMessageEvent } from '@slack/types';
+import * as fs from 'fs';
+import * as path from 'path';
 
 import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
+import { GROUPS_DIR } from '../config.js';
 import { updateChatName } from '../db.js';
 import { readEnvFile } from '../env.js';
 import { logger } from '../logger.js';
@@ -37,6 +40,8 @@ export class SlackChannel implements Channel {
   private outgoingQueue: Array<{ jid: string; text: string }> = [];
   private flushing = false;
   private userNameCache = new Map<string, string>();
+  /** Track the last user message ts per channel for reaction-based typing indicator */
+  private lastUserMessageTs = new Map<string, string>();
 
   private opts: SlackChannelOpts;
 
@@ -94,8 +99,7 @@ export class SlackChannel implements Channel {
       const groups = this.opts.registeredGroups();
       if (!groups[jid]) return;
 
-      const isBotMessage =
-        !!msg.bot_id || msg.user === this.botUserId;
+      const isBotMessage = !!msg.bot_id || msg.user === this.botUserId;
 
       let senderName: string;
       if (isBotMessage) {
@@ -113,9 +117,17 @@ export class SlackChannel implements Channel {
       let content = msg.text;
       if (this.botUserId && !isBotMessage) {
         const mentionPattern = `<@${this.botUserId}>`;
-        if (content.includes(mentionPattern) && !TRIGGER_PATTERN.test(content)) {
+        if (
+          content.includes(mentionPattern) &&
+          !TRIGGER_PATTERN.test(content)
+        ) {
           content = `@${ASSISTANT_NAME} ${content}`;
         }
+      }
+
+      // Track last user message ts for reaction-based typing indicator
+      if (!isBotMessage && msg.ts) {
+        this.lastUserMessageTs.set(jid, msg.ts);
       }
 
       this.opts.onMessage(jid, {
@@ -142,10 +154,7 @@ export class SlackChannel implements Channel {
       this.botUserId = auth.user_id as string;
       logger.info({ botUserId: this.botUserId }, 'Connected to Slack');
     } catch (err) {
-      logger.warn(
-        { err },
-        'Connected to Slack but failed to get bot user ID',
-      );
+      logger.warn({ err }, 'Connected to Slack but failed to get bot user ID');
     }
 
     this.connected = true;
@@ -155,6 +164,49 @@ export class SlackChannel implements Channel {
 
     // Sync channel names on startup
     await this.syncChannelMetadata();
+  }
+
+  /**
+   * Resolve a container path like /workspace/group/file.png to the host path
+   * using the registered group's folder name.
+   */
+  private resolveContainerPath(
+    jid: string,
+    containerPath: string,
+  ): string | null {
+    const groups = this.opts.registeredGroups();
+    const group = groups[jid];
+    if (!group) return null;
+
+    // /workspace/group/foo.png → foo.png
+    const relative = containerPath.replace(/^\/workspace\/group\//, '');
+    if (relative === containerPath) return null; // not a /workspace/group path
+    const hostPath = path.join(GROUPS_DIR, group.folder, relative);
+    return fs.existsSync(hostPath) ? hostPath : null;
+  }
+
+  /**
+   * Extract markdown image references from text, returning file paths to upload
+   * and the text with those references removed.
+   */
+  private extractFileReferences(
+    jid: string,
+    text: string,
+  ): { cleanText: string; filePaths: string[] } {
+    const filePaths: string[] = [];
+    // Match ![alt](/workspace/group/path) or bare /workspace/group/path.ext
+    const imgPattern = /!\[[^\]]*\]\(([^)]+)\)/g;
+    let cleanText = text.replace(imgPattern, (_match, filePath: string) => {
+      const hostPath = this.resolveContainerPath(jid, filePath.trim());
+      if (hostPath) {
+        filePaths.push(hostPath);
+        return ''; // remove the markdown image reference
+      }
+      return _match; // keep as-is if file not found
+    });
+    // Clean up extra blank lines left behind
+    cleanText = cleanText.replace(/\n{3,}/g, '\n\n').trim();
+    return { cleanText, filePaths };
   }
 
   async sendMessage(jid: string, text: string): Promise<void> {
@@ -170,18 +222,51 @@ export class SlackChannel implements Channel {
     }
 
     try {
-      // Slack limits messages to ~4000 characters; split if needed
-      if (text.length <= MAX_MESSAGE_LENGTH) {
-        await this.app.client.chat.postMessage({ channel: channelId, text });
-      } else {
-        for (let i = 0; i < text.length; i += MAX_MESSAGE_LENGTH) {
+      // Extract file references and upload them natively
+      const { cleanText, filePaths } = this.extractFileReferences(jid, text);
+
+      // Send text portion (if any remains after extracting files)
+      if (cleanText) {
+        if (cleanText.length <= MAX_MESSAGE_LENGTH) {
           await this.app.client.chat.postMessage({
             channel: channelId,
-            text: text.slice(i, i + MAX_MESSAGE_LENGTH),
+            text: cleanText,
+          });
+        } else {
+          for (let i = 0; i < cleanText.length; i += MAX_MESSAGE_LENGTH) {
+            await this.app.client.chat.postMessage({
+              channel: channelId,
+              text: cleanText.slice(i, i + MAX_MESSAGE_LENGTH),
+            });
+          }
+        }
+      }
+
+      // Upload files
+      for (const filePath of filePaths) {
+        try {
+          const filename = path.basename(filePath);
+          await this.app.client.filesUploadV2({
+            channel_id: channelId,
+            file: fs.createReadStream(filePath),
+            filename,
+            title: filename,
+          });
+          logger.info({ jid, filename }, 'Slack file uploaded');
+        } catch (fileErr) {
+          logger.warn({ jid, filePath, err: fileErr }, 'Failed to upload file to Slack');
+          // Fall back to sending the path as text
+          await this.app.client.chat.postMessage({
+            channel: channelId,
+            text: `📎 File: ${path.basename(filePath)}`,
           });
         }
       }
-      logger.info({ jid, length: text.length }, 'Slack message sent');
+
+      logger.info(
+        { jid, length: text.length, fileCount: filePaths.length },
+        'Slack message sent',
+      );
     } catch (err) {
       this.outgoingQueue.push({ jid, text });
       logger.warn(
@@ -207,8 +292,31 @@ export class SlackChannel implements Channel {
   // Slack does not expose a typing indicator API for bots.
   // This no-op satisfies the Channel interface so the orchestrator
   // doesn't need channel-specific branching.
-  async setTyping(_jid: string, _isTyping: boolean): Promise<void> {
-    // no-op: Slack Bot API has no typing indicator endpoint
+  /** Track the "working on it" message ts per channel so we can delete it later */
+  private workingMessageTs = new Map<string, string>();
+
+  async setTyping(jid: string, isTyping: boolean): Promise<void> {
+    const channelId = jid.replace(/^slack:/, '');
+
+    try {
+      if (isTyping) {
+        const result = await this.app.client.chat.postMessage({
+          channel: channelId,
+          text: '⏳ Working on it…',
+        });
+        if (result.ts) {
+          this.workingMessageTs.set(jid, result.ts);
+        }
+      } else {
+        const ts = this.workingMessageTs.get(jid);
+        if (ts) {
+          await this.app.client.chat.delete({ channel: channelId, ts });
+          this.workingMessageTs.delete(jid);
+        }
+      }
+    } catch {
+      // Ignore — best-effort indicator
+    }
   }
 
   /**
@@ -245,9 +353,7 @@ export class SlackChannel implements Channel {
     }
   }
 
-  private async resolveUserName(
-    userId: string,
-  ): Promise<string | undefined> {
+  private async resolveUserName(userId: string): Promise<string | undefined> {
     if (!userId) return undefined;
 
     const cached = this.userNameCache.get(userId);

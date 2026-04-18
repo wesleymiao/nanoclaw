@@ -1,0 +1,278 @@
+#!/bin/bash
+# Slack CLI for NanoClaw container agents.
+# Usage: slack <command> [args...]
+#
+# Requires SLACK_BOT_TOKEN and SLACK_CHANNEL_ID env vars (injected by NanoClaw).
+
+set -euo pipefail
+
+TOKEN="${SLACK_BOT_TOKEN:-}"
+CHANNEL="${SLACK_CHANNEL_ID:-}"
+
+if [ -z "$TOKEN" ]; then
+  echo "Error: SLACK_BOT_TOKEN not set (not a Slack channel?)" >&2
+  exit 1
+fi
+
+api() {
+  local method="$1" endpoint="$2"; shift 2
+  curl -s -X "$method" "https://slack.com/api/$endpoint" \
+    -H "Authorization: Bearer $TOKEN" "$@"
+}
+
+check_ok() {
+  local resp="$1" action="$2"
+  if ! echo "$resp" | grep -q '"ok":true'; then
+    local err
+    err=$(echo "$resp" | grep -o '"error":"[^"]*"' | cut -d'"' -f4)
+    echo "Error: $action failed: ${err:-$resp}" >&2
+    return 1
+  fi
+}
+
+CMD="${1:-help}"; shift || true
+
+case "$CMD" in
+
+  ## --- Messaging ---
+
+  send)
+    # Send a message. Usage: slack send "text" [--thread THREAD_TS]
+    TEXT="$1"; shift || { echo "Usage: slack send \"text\" [--thread TS]" >&2; exit 1; }
+    THREAD=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --thread) THREAD="$2"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    PAYLOAD="{\"channel\":\"$CHANNEL\",\"text\":$(printf '%s' "$TEXT" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')}"
+    if [ -n "$THREAD" ]; then
+      PAYLOAD=$(echo "$PAYLOAD" | python3 -c "import sys,json; d=json.load(sys.stdin); d['thread_ts']='$THREAD'; print(json.dumps(d))")
+    fi
+    RESP=$(api POST chat.postMessage -H "Content-Type: application/json" -d "$PAYLOAD")
+    check_ok "$RESP" "send" || exit 1
+    TS=$(echo "$RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('ts',''))")
+    echo "Sent (ts=$TS)"
+    ;;
+
+  update)
+    # Update a message. Usage: slack update <ts> "new text"
+    TS="$1"; TEXT="$2"
+    PAYLOAD="{\"channel\":\"$CHANNEL\",\"ts\":\"$TS\",\"text\":$(printf '%s' "$TEXT" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')}"
+    RESP=$(api POST chat.update -H "Content-Type: application/json" -d "$PAYLOAD")
+    check_ok "$RESP" "update" || exit 1
+    echo "Updated"
+    ;;
+
+  delete)
+    # Delete a message. Usage: slack delete <ts>
+    TS="$1"
+    RESP=$(api POST chat.delete -H "Content-Type: application/json" \
+      -d "{\"channel\":\"$CHANNEL\",\"ts\":\"$TS\"}")
+    check_ok "$RESP" "delete" || exit 1
+    echo "Deleted"
+    ;;
+
+  ## --- Threads ---
+
+  reply)
+    # Reply in a thread. Usage: slack reply <thread_ts> "text"
+    THREAD_TS="$1"; TEXT="$2"
+    PAYLOAD="{\"channel\":\"$CHANNEL\",\"thread_ts\":\"$THREAD_TS\",\"text\":$(printf '%s' "$TEXT" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')}"
+    RESP=$(api POST chat.postMessage -H "Content-Type: application/json" -d "$PAYLOAD")
+    check_ok "$RESP" "reply" || exit 1
+    TS=$(echo "$RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('ts',''))")
+    echo "Replied (ts=$TS)"
+    ;;
+
+  thread)
+    # Get thread replies. Usage: slack thread <thread_ts> [--limit N]
+    THREAD_TS="$1"; shift
+    LIMIT=20
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --limit) LIMIT="$2"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    RESP=$(api GET "conversations.replies?channel=$CHANNEL&ts=$THREAD_TS&limit=$LIMIT")
+    check_ok "$RESP" "thread" || exit 1
+    echo "$RESP" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+for m in data.get('messages', []):
+    user = m.get('user', m.get('bot_id', '?'))
+    text = m.get('text', '')
+    ts = m.get('ts', '')
+    print(f'[{ts}] {user}: {text}')
+"
+    ;;
+
+  ## --- Reactions ---
+
+  react)
+    # Add a reaction. Usage: slack react <ts> <emoji_name>
+    TS="$1"; EMOJI="$2"
+    RESP=$(api POST reactions.add -H "Content-Type: application/json" \
+      -d "{\"channel\":\"$CHANNEL\",\"timestamp\":\"$TS\",\"name\":\"$EMOJI\"}")
+    check_ok "$RESP" "react" || exit 1
+    echo "Reacted :$EMOJI:"
+    ;;
+
+  unreact)
+    # Remove a reaction. Usage: slack unreact <ts> <emoji_name>
+    TS="$1"; EMOJI="$2"
+    RESP=$(api POST reactions.remove -H "Content-Type: application/json" \
+      -d "{\"channel\":\"$CHANNEL\",\"timestamp\":\"$TS\",\"name\":\"$EMOJI\"}")
+    check_ok "$RESP" "unreact" || exit 1
+    echo "Removed :$EMOJI:"
+    ;;
+
+  ## --- Files ---
+
+  upload)
+    # Upload a file. Usage: slack upload <file-path> [title]
+    FILE="$1"; TITLE="${2:-$(basename "$FILE")}"
+    if [ ! -f "$FILE" ]; then
+      echo "Error: File not found: $FILE" >&2; exit 1
+    fi
+    FILESIZE=$(stat -c%s "$FILE" 2>/dev/null || stat -f%z "$FILE" 2>/dev/null)
+    FILENAME=$(basename "$FILE")
+
+    # Step 1: Get upload URL
+    RESP=$(api POST files.getUploadURLExternal \
+      -d "filename=$FILENAME" -d "length=$FILESIZE")
+    check_ok "$RESP" "get upload URL" || exit 1
+    UPLOAD_URL=$(echo "$RESP" | grep -o '"upload_url":"[^"]*"' | cut -d'"' -f4)
+    FILE_ID=$(echo "$RESP" | grep -o '"file_id":"[^"]*"' | cut -d'"' -f4)
+
+    # Step 2: Upload
+    curl -s -X POST "$UPLOAD_URL" -F "file=@$FILE" > /dev/null
+
+    # Step 3: Complete
+    RESP=$(api POST files.completeUploadExternal \
+      -H "Content-Type: application/json" \
+      -d "{\"files\":[{\"id\":\"$FILE_ID\",\"title\":\"$TITLE\"}],\"channel_id\":\"$CHANNEL\"}")
+    check_ok "$RESP" "complete upload" || exit 1
+    echo "Uploaded $FILENAME"
+    ;;
+
+  ## --- Channel History ---
+
+  history)
+    # Read recent messages. Usage: slack history [--limit N]
+    LIMIT=20
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --limit) LIMIT="$2"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    RESP=$(api GET "conversations.history?channel=$CHANNEL&limit=$LIMIT")
+    check_ok "$RESP" "history" || exit 1
+    echo "$RESP" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+for m in reversed(data.get('messages', [])):
+    user = m.get('user', m.get('bot_id', '?'))
+    text = m.get('text', '')[:200]
+    ts = m.get('ts', '')
+    thread = ' [thread]' if 'thread_ts' in m and m.get('thread_ts') != m.get('ts') else ''
+    print(f'[{ts}] {user}: {text}{thread}')
+"
+    ;;
+
+  ## --- Users ---
+
+  userinfo)
+    # Get user info. Usage: slack userinfo <user_id>
+    USER_ID="$1"
+    RESP=$(api GET "users.info?user=$USER_ID")
+    check_ok "$RESP" "userinfo" || exit 1
+    echo "$RESP" | python3 -c "
+import sys, json
+u = json.load(sys.stdin).get('user', {})
+print(f'Name: {u.get(\"real_name\", u.get(\"name\", \"?\"))}')
+print(f'Display: {u.get(\"profile\", {}).get(\"display_name\", \"\")}')
+print(f'Email: {u.get(\"profile\", {}).get(\"email\", \"\")}')
+print(f'Title: {u.get(\"profile\", {}).get(\"title\", \"\")}')
+print(f'Bot: {u.get(\"is_bot\", False)}')
+"
+    ;;
+
+  ## --- Pins & Bookmarks ---
+
+  pin)
+    # Pin a message. Usage: slack pin <ts>
+    TS="$1"
+    RESP=$(api POST pins.add -H "Content-Type: application/json" \
+      -d "{\"channel\":\"$CHANNEL\",\"timestamp\":\"$TS\"}")
+    check_ok "$RESP" "pin" || exit 1
+    echo "Pinned"
+    ;;
+
+  unpin)
+    # Unpin a message. Usage: slack unpin <ts>
+    TS="$1"
+    RESP=$(api POST pins.remove -H "Content-Type: application/json" \
+      -d "{\"channel\":\"$CHANNEL\",\"timestamp\":\"$TS\"}")
+    check_ok "$RESP" "unpin" || exit 1
+    echo "Unpinned"
+    ;;
+
+  pins)
+    # List pinned messages. Usage: slack pins
+    RESP=$(api GET "pins.list?channel=$CHANNEL")
+    check_ok "$RESP" "pins" || exit 1
+    echo "$RESP" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+for item in data.get('items', []):
+    m = item.get('message', {})
+    print(f'[{m.get(\"ts\",\"\")}] {m.get(\"user\",\"?\")}: {m.get(\"text\",\"\")[:100]}')
+"
+    ;;
+
+  ## --- Help ---
+
+  help|--help|-h)
+    cat <<'HELP'
+Slack CLI for NanoClaw agents
+
+Messaging:
+  slack send "text" [--thread TS]     Send a message (optionally in a thread)
+  slack reply <thread_ts> "text"      Reply in a thread
+  slack update <ts> "new text"        Edit a message
+  slack delete <ts>                   Delete a message
+
+Files:
+  slack upload <file> [title]         Upload a file to the channel
+
+Reactions:
+  slack react <ts> <emoji>            Add emoji reaction (e.g. "thumbsup")
+  slack unreact <ts> <emoji>          Remove emoji reaction
+
+History:
+  slack history [--limit N]           Read recent channel messages
+  slack thread <ts> [--limit N]       Read thread replies
+
+Users:
+  slack userinfo <user_id>            Get user profile info
+
+Pins:
+  slack pin <ts>                      Pin a message
+  slack unpin <ts>                    Unpin a message
+  slack pins                          List pinned messages
+
+Environment:
+  SLACK_BOT_TOKEN                     Bot token (injected by NanoClaw)
+  SLACK_CHANNEL_ID                    Current channel (injected by NanoClaw)
+HELP
+    ;;
+
+  *)
+    echo "Unknown command: $CMD (run 'slack help' for usage)" >&2
+    exit 1
+    ;;
+esac
