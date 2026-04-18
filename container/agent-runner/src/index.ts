@@ -536,11 +536,16 @@ async function runQuery(
     if (message.type === 'assistant' && 'uuid' in message) {
       lastAssistantUuid = (message as { uuid: string }).uuid;
 
-      // Verbose: emit tool use notifications
+      // Verbose: emit reasoning text and tool use notifications
       if (containerInput.verbose) {
         const content = (message as any).message?.content;
         if (Array.isArray(content)) {
           for (const block of content) {
+            if (block.type === 'text' && block.text?.trim()) {
+              // Send reasoning text, truncated to keep chat readable
+              const text = block.text.trim().slice(0, 500);
+              writeVerboseMessage(containerInput.chatJid, containerInput.groupFolder, `💭 ${text}`);
+            }
             if (block.type === 'tool_use') {
               const notification = formatToolNotification(block.name, block.input);
               writeVerboseMessage(containerInput.chatJid, containerInput.groupFolder, notification);
