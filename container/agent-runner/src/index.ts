@@ -443,6 +443,7 @@ async function runQuery(
 
   let newSessionId: string | undefined;
   let lastAssistantUuid: string | undefined;
+  let pendingVerboseReasoning: string | undefined;
   let messageCount = 0;
   let resultCount = 0;
 
@@ -533,20 +534,24 @@ async function runQuery(
         : message.type;
     log(`[msg #${messageCount}] type=${msgType}`);
 
+    // Flush any buffered verbose reasoning from the previous assistant message
+    // (skip it if this message is the result — that means the reasoning was the final answer)
+    if (containerInput.verbose && pendingVerboseReasoning && message.type !== 'result') {
+      writeVerboseMessage(containerInput.chatJid, containerInput.groupFolder, `💭 ${pendingVerboseReasoning}`);
+    }
+    pendingVerboseReasoning = undefined;
+
     if (message.type === 'assistant' && 'uuid' in message) {
       lastAssistantUuid = (message as { uuid: string }).uuid;
 
       // Verbose: emit reasoning text and tool use notifications
-      // Only emit reasoning when the same message also contains tool_use blocks,
-      // otherwise it's the final answer which will be sent as the actual response.
       if (containerInput.verbose) {
         const content = (message as any).message?.content;
         if (Array.isArray(content)) {
-          const hasToolUse = content.some((b: any) => b.type === 'tool_use');
           for (const block of content) {
-            if (block.type === 'text' && block.text?.trim() && hasToolUse) {
+            if (block.type === 'text' && block.text?.trim()) {
               const text = block.text.trim().slice(0, 500);
-              writeVerboseMessage(containerInput.chatJid, containerInput.groupFolder, `💭 ${text}`);
+              pendingVerboseReasoning = text;
             }
             if (block.type === 'tool_use') {
               const notification = formatToolNotification(block.name, block.input);
