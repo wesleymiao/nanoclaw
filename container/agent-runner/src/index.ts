@@ -443,7 +443,6 @@ async function runQuery(
 
   let newSessionId: string | undefined;
   let lastAssistantUuid: string | undefined;
-  let pendingVerboseReasoning: string | undefined;
   let messageCount = 0;
   let resultCount = 0;
 
@@ -534,13 +533,6 @@ async function runQuery(
         : message.type;
     log(`[msg #${messageCount}] type=${msgType}`);
 
-    // Flush any buffered verbose reasoning from the previous assistant message
-    // (skip it if this message is the result — that means the reasoning was the final answer)
-    if (containerInput.verbose && pendingVerboseReasoning && message.type !== 'result') {
-      writeVerboseMessage(containerInput.chatJid, containerInput.groupFolder, `💭 ${pendingVerboseReasoning}`);
-    }
-    pendingVerboseReasoning = undefined;
-
     if (message.type === 'assistant' && 'uuid' in message) {
       lastAssistantUuid = (message as { uuid: string }).uuid;
 
@@ -551,7 +543,7 @@ async function runQuery(
           for (const block of content) {
             if (block.type === 'text' && block.text?.trim()) {
               const text = block.text.trim().slice(0, 500);
-              pendingVerboseReasoning = text;
+              writeVerboseMessage(containerInput.chatJid, containerInput.groupFolder, `💭 ${text}`);
             }
             if (block.type === 'tool_use') {
               const notification = formatToolNotification(block.name, block.input);
