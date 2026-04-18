@@ -33,6 +33,7 @@ interface ContainerInput {
   isScheduledTask?: boolean;
   assistantName?: string;
   script?: string;
+  verbose?: boolean;
 }
 
 interface ContainerOutput {
@@ -61,6 +62,39 @@ interface SDKUserMessage {
 }
 
 const IPC_INPUT_DIR = '/workspace/ipc/input';
+const IPC_MESSAGES_DIR = '/workspace/ipc/messages';
+
+// --- Verbose mode helpers ---
+
+function writeVerboseMessage(chatJid: string, groupFolder: string, text: string): void {
+  fs.mkdirSync(IPC_MESSAGES_DIR, { recursive: true });
+  const data = { type: 'message', chatJid, text, groupFolder, timestamp: new Date().toISOString() };
+  const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`;
+  const tmpPath = path.join(IPC_MESSAGES_DIR, `.${filename}.tmp`);
+  const finalPath = path.join(IPC_MESSAGES_DIR, filename);
+  fs.writeFileSync(tmpPath, JSON.stringify(data));
+  fs.renameSync(tmpPath, finalPath);
+}
+
+function formatToolNotification(name: string, input: any): string {
+  const emoji: Record<string, string> = {
+    Bash: '🔧', Read: '📄', Write: '📝', Edit: '✏️',
+    Glob: '📂', Grep: '🔍', WebSearch: '🌐', WebFetch: '🌐',
+    Agent: '🤖', NotebookEdit: '📓',
+  };
+  const icon = emoji[name] || '🔨';
+  let preview = '';
+  if (name === 'Bash') preview = input?.command?.split('\n')[0]?.slice(0, 80) || '';
+  else if (name === 'Read') preview = input?.file_path || '';
+  else if (name === 'Edit') preview = input?.file_path || '';
+  else if (name === 'Write') preview = input?.file_path || '';
+  else if (name === 'Grep') preview = `"${input?.pattern || ''}"` + (input?.path ? ` in ${input.path}` : '');
+  else if (name === 'WebSearch') preview = input?.query || '';
+  else if (name === 'WebFetch') preview = input?.url || '';
+  else if (name === 'Glob') preview = input?.pattern || '';
+  else if (name === 'Agent') preview = input?.description || input?.prompt?.slice(0, 60) || '';
+  return `${icon} ${name}: ${preview || '...'}`.slice(0, 200);
+}
 const IPC_INPUT_CLOSE_SENTINEL = path.join(IPC_INPUT_DIR, '_close');
 const IPC_POLL_MS = 500;
 
@@ -501,6 +535,19 @@ async function runQuery(
 
     if (message.type === 'assistant' && 'uuid' in message) {
       lastAssistantUuid = (message as { uuid: string }).uuid;
+
+      // Verbose: emit tool use notifications
+      if (containerInput.verbose) {
+        const content = (message as any).message?.content;
+        if (Array.isArray(content)) {
+          for (const block of content) {
+            if (block.type === 'tool_use') {
+              const notification = formatToolNotification(block.name, block.input);
+              writeVerboseMessage(containerInput.chatJid, containerInput.groupFolder, notification);
+            }
+          }
+        }
+      }
     }
 
     if (message.type === 'system' && message.subtype === 'init') {
@@ -534,6 +581,21 @@ async function runQuery(
         result: textResult || null,
         newSessionId,
       });
+    }
+
+    // Verbose: tool progress (long-running tools)
+    if (containerInput.verbose && message.type === 'tool_progress') {
+      const tp = message as any;
+      if (tp.elapsed_time_seconds >= 5) {
+        writeVerboseMessage(containerInput.chatJid, containerInput.groupFolder,
+          `⏳ ${tp.tool_name}: still running (${Math.round(tp.elapsed_time_seconds)}s)`);
+      }
+    }
+
+    // Verbose: tool use summary
+    if (containerInput.verbose && message.type === 'tool_use_summary') {
+      writeVerboseMessage(containerInput.chatJid, containerInput.groupFolder,
+        `✅ ${(message as any).summary}`);
     }
   }
 

@@ -4,7 +4,11 @@ import * as path from 'path';
 
 import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
 import { GROUPS_DIR } from '../config.js';
-import { updateChatName, setRegisteredGroup, getAllRegisteredGroups } from '../db.js';
+import {
+  updateChatName,
+  setRegisteredGroup,
+  getAllRegisteredGroups,
+} from '../db.js';
 import { readEnvFile } from '../env.js';
 import { logger } from '../logger.js';
 import { registerChannel, ChannelOpts } from './registry.js';
@@ -47,7 +51,9 @@ export class FeishuChannel implements Channel {
     const appSecret = env.FEISHU_APP_SECRET;
 
     if (!appId || !appSecret) {
-      throw new Error('FEISHU_APP_ID and FEISHU_APP_SECRET must be set in .env');
+      throw new Error(
+        'FEISHU_APP_ID and FEISHU_APP_SECRET must be set in .env',
+      );
     }
 
     this.client = new lark.Client({
@@ -68,7 +74,10 @@ export class FeishuChannel implements Channel {
   private setupEventHandlers(): void {
     this.dispatcher.register({
       'im.message.receive_v1': async (data: any) => {
-        logger.debug({ eventType: 'im.message.receive_v1' }, 'Feishu event received');
+        logger.debug(
+          { eventType: 'im.message.receive_v1' },
+          'Feishu event received',
+        );
         try {
           await this.handleMessage(data);
         } catch (err) {
@@ -127,12 +136,13 @@ export class FeishuChannel implements Channel {
     // Auto-register unregistered Feishu chats
     let groups = this.opts.registeredGroups();
     if (!groups[jid]) {
-      const chatName = await this.resolveChatName(chatId) || chatId;
-      const safeName = chatName
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '-')
-        .replace(/^-|-$/g, '')
-        .slice(0, 30) || chatId.slice(0, 12);
+      const chatName = (await this.resolveChatName(chatId)) || chatId;
+      const safeName =
+        chatName
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/^-|-$/g, '')
+          .slice(0, 30) || chatId.slice(0, 12);
       const folder = `feishu_${safeName}`;
 
       const group: RegisteredGroup = {
@@ -151,8 +161,11 @@ export class FeishuChannel implements Channel {
       fs.mkdirSync(groupDir, { recursive: true });
       const mainTemplate = path.join(GROUPS_DIR, 'feishu_main', 'CLAUDE.md');
       const defaultTemplate = path.join(GROUPS_DIR, 'main', 'CLAUDE.md');
-      const template = fs.existsSync(mainTemplate) ? mainTemplate :
-                        fs.existsSync(defaultTemplate) ? defaultTemplate : null;
+      const template = fs.existsSync(mainTemplate)
+        ? mainTemplate
+        : fs.existsSync(defaultTemplate)
+          ? defaultTemplate
+          : null;
       if (template) {
         fs.copyFileSync(template, path.join(groupDir, 'CLAUDE.md'));
       }
@@ -163,7 +176,10 @@ export class FeishuChannel implements Channel {
       // Update via the opts callback's underlying reference
       Object.assign(groups, freshGroups);
 
-      logger.info({ jid, name: chatName, folder }, 'Feishu: auto-registered new chat');
+      logger.info(
+        { jid, name: chatName, folder },
+        'Feishu: auto-registered new chat',
+      );
     }
 
     // Parse message content — Feishu sends JSON strings
@@ -185,7 +201,8 @@ export class FeishuChannel implements Channel {
 
     // Get sender info
     const sender = data.sender;
-    const senderId = sender?.sender_id?.open_id || sender?.sender_id?.user_id || '';
+    const senderId =
+      sender?.sender_id?.open_id || sender?.sender_id?.user_id || '';
     const senderType = sender?.sender_type || '';
     const isBotMessage = senderType === 'app';
 
@@ -262,16 +279,24 @@ export class FeishuChannel implements Channel {
       for (const filePath of filePaths) {
         try {
           await this.uploadFile(chatId, filePath);
-          logger.info({ jid, filename: path.basename(filePath) }, 'Feishu file uploaded');
+          logger.info(
+            { jid, filename: path.basename(filePath) },
+            'Feishu file uploaded',
+          );
         } catch (fileErr) {
-          logger.warn({ jid, filePath, err: fileErr }, 'Failed to upload file to Feishu');
+          logger.warn(
+            { jid, filePath, err: fileErr },
+            'Failed to upload file to Feishu',
+          );
           // Fall back to text
           await this.client.im.message.create({
             params: { receive_id_type: 'chat_id' },
             data: {
               receive_id: chatId,
               msg_type: 'text',
-              content: JSON.stringify({ text: `📎 File: ${path.basename(filePath)}` }),
+              content: JSON.stringify({
+                text: `📎 File: ${path.basename(filePath)}`,
+              }),
             },
           });
         }
@@ -292,7 +317,9 @@ export class FeishuChannel implements Channel {
 
   private async uploadFile(chatId: string, filePath: string): Promise<void> {
     const ext = path.extname(filePath).toLowerCase();
-    const isImage = ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp'].includes(ext);
+    const isImage = ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp'].includes(
+      ext,
+    );
 
     if (isImage) {
       // Upload as image
@@ -336,8 +363,13 @@ export class FeishuChannel implements Channel {
     }
   }
 
-  private getFeishuFileType(ext: string): 'opus' | 'mp4' | 'pdf' | 'doc' | 'xls' | 'ppt' | 'stream' {
-    const map: Record<string, 'opus' | 'mp4' | 'pdf' | 'doc' | 'xls' | 'ppt' | 'stream'> = {
+  private getFeishuFileType(
+    ext: string,
+  ): 'opus' | 'mp4' | 'pdf' | 'doc' | 'xls' | 'ppt' | 'stream' {
+    const map: Record<
+      string,
+      'opus' | 'mp4' | 'pdf' | 'doc' | 'xls' | 'ppt' | 'stream'
+    > = {
       '.pdf': 'pdf',
       '.doc': 'doc',
       '.docx': 'doc',

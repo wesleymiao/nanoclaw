@@ -45,6 +45,7 @@ export interface ContainerInput {
   isScheduledTask?: boolean;
   assistantName?: string;
   script?: string;
+  verbose?: boolean;
 }
 
 export interface ContainerOutput {
@@ -286,7 +287,10 @@ async function buildContainerArgs(
   args.push('-e', `TZ=${TIMEZONE}`);
 
   // Add NanoClaw scripts to PATH
-  args.push('-e', 'PATH=/opt/nanoclaw/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin');
+  args.push(
+    '-e',
+    'PATH=/opt/nanoclaw/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+  );
 
   // Forward API proxy settings when using a local proxy instead of direct API access.
   // These env vars override the default api.anthropic.com endpoint inside the container.
@@ -307,7 +311,10 @@ async function buildContainerArgs(
   // entirely — its HTTP_PROXY/HTTPS_PROXY injection would intercept and corrupt
   // traffic to the local proxy endpoint.
   if (process.env.ANTHROPIC_BASE_URL) {
-    logger.info({ containerName }, 'Local API proxy configured — skipping OneCLI gateway');
+    logger.info(
+      { containerName },
+      'Local API proxy configured — skipping OneCLI gateway',
+    );
   } else {
     // OneCLI gateway handles credential injection — containers never see real secrets.
     // The gateway intercepts HTTPS traffic and injects API keys or OAuth tokens.

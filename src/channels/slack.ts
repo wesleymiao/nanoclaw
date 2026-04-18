@@ -254,7 +254,10 @@ export class SlackChannel implements Channel {
           });
           logger.info({ jid, filename }, 'Slack file uploaded');
         } catch (fileErr) {
-          logger.warn({ jid, filePath, err: fileErr }, 'Failed to upload file to Slack');
+          logger.warn(
+            { jid, filePath, err: fileErr },
+            'Failed to upload file to Slack',
+          );
           // Fall back to sending the path as text
           await this.app.client.chat.postMessage({
             channel: channelId,
