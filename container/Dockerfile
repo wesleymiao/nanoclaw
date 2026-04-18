@@ -70,6 +70,9 @@ RUN printf '#!/bin/bash\nset -e\ncd /app && npx tsc --outDir /tmp/dist 2>&1 >&2\
 # Set ownership to node user (non-root) for writable directories
 RUN chown -R node:node /workspace && chmod 777 /home/node
 
+# Configure gh as git credential helper so all repos can push via mounted gh auth
+RUN git config --system credential.helper '!/usr/bin/gh auth git-credential'
+
 # Switch to non-root user (required for --dangerously-skip-permissions)
 USER node
 
