@@ -537,12 +537,14 @@ async function runQuery(
       lastAssistantUuid = (message as { uuid: string }).uuid;
 
       // Verbose: emit reasoning text and tool use notifications
+      // Only emit reasoning when the same message also contains tool_use blocks,
+      // otherwise it's the final answer which will be sent as the actual response.
       if (containerInput.verbose) {
         const content = (message as any).message?.content;
         if (Array.isArray(content)) {
+          const hasToolUse = content.some((b: any) => b.type === 'tool_use');
           for (const block of content) {
-            if (block.type === 'text' && block.text?.trim()) {
-              // Send reasoning text, truncated to keep chat readable
+            if (block.type === 'text' && block.text?.trim() && hasToolUse) {
               const text = block.text.trim().slice(0, 500);
               writeVerboseMessage(containerInput.chatJid, containerInput.groupFolder, `💭 ${text}`);
             }
