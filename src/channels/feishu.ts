@@ -478,9 +478,9 @@ export class FeishuChannel implements Channel {
         data: { reaction_type: { emoji_type: emoji } },
       });
     } catch (err) {
-      logger.debug(
+      logger.warn(
         { jid, messageId, emoji, err },
-        'Feishu reactToMessage error (non-fatal)',
+        'Feishu reactToMessage error',
       );
     }
   }

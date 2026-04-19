@@ -282,7 +282,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   // React to the last user message with OK emoji as acknowledgment
   const lastMsg = missedMessages[missedMessages.length - 1];
   if (lastMsg?.id && channel.reactToMessage) {
-    await channel.reactToMessage(chatJid, lastMsg.id, 'OK').catch(() => {});
+    await channel.reactToMessage(chatJid, lastMsg.id, 'OK');
   } else {
     await channel.setTyping?.(chatJid, true);
   }
@@ -532,12 +532,21 @@ async function startMessageLoop(): Promise<void> {
             lastAgentTimestamp[chatJid] =
               messagesToSend[messagesToSend.length - 1].timestamp;
             saveState();
-            // Show typing indicator while the container processes the piped message
-            channel
-              .setTyping?.(chatJid, true)
-              ?.catch((err) =>
-                logger.warn({ chatJid, err }, 'Failed to set typing indicator'),
-              );
+            // React to acknowledge the piped message
+            const lastPiped = messagesToSend[messagesToSend.length - 1];
+            if (lastPiped?.id && channel.reactToMessage) {
+              channel
+                .reactToMessage(chatJid, lastPiped.id, 'OK')
+                .catch((err) =>
+                  logger.warn({ chatJid, err }, 'Failed to react to piped message'),
+                );
+            } else {
+              channel
+                .setTyping?.(chatJid, true)
+                ?.catch((err) =>
+                  logger.warn({ chatJid, err }, 'Failed to set typing indicator'),
+                );
+            }
           } else {
             // No active container — enqueue for a new one
             queue.enqueueMessageCheck(chatJid);
