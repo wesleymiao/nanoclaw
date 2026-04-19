@@ -68,7 +68,9 @@ const IPC_MESSAGES_DIR = '/workspace/ipc/messages';
 
 function writeVerboseMessage(chatJid: string, groupFolder: string, text: string): void {
   fs.mkdirSync(IPC_MESSAGES_DIR, { recursive: true });
-  const data = { type: 'message', chatJid, text, groupFolder, timestamp: new Date().toISOString() };
+  // Prefix each line with ▎ to visually indent verbose messages
+  const indented = text.split('\n').map(line => `▎${line}`).join('\n');
+  const data = { type: 'message', chatJid, text: indented, groupFolder, timestamp: new Date().toISOString() };
   const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`;
   const tmpPath = path.join(IPC_MESSAGES_DIR, `.${filename}.tmp`);
   const finalPath = path.join(IPC_MESSAGES_DIR, filename);
