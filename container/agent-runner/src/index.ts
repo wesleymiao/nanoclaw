@@ -545,7 +545,7 @@ async function runQuery(
         if (Array.isArray(content)) {
           for (const block of content) {
             if (block.type === 'text' && block.text?.trim()) {
-              const text = block.text.trim().slice(0, 2000);
+              const text = block.text.trim();
               if (text !== lastVerboseText) {
                 lastVerboseText = text;
                 writeVerboseMessage(containerInput.chatJid, containerInput.groupFolder, `💭 ${text}`);
