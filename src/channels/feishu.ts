@@ -464,19 +464,24 @@ export class FeishuChannel implements Channel {
   }
 
   async setTyping(jid: string, isTyping: boolean): Promise<void> {
-    if (!isTyping) return;
-    const chatId = jid.replace(/^feishu:/, '');
+    // No-op — we use reactToMessage instead
+  }
+
+  async reactToMessage(
+    jid: string,
+    messageId: string,
+    emoji: string,
+  ): Promise<void> {
     try {
-      await this.client.im.message.create({
-        params: { receive_id_type: 'chat_id' },
-        data: {
-          receive_id: chatId,
-          msg_type: 'text',
-          content: JSON.stringify({ text: '⏳ Working on it…' }),
-        },
+      await (this.client as any).im.messageReaction.create({
+        path: { message_id: messageId },
+        data: { reaction_type: { emoji_type: emoji } },
       });
     } catch (err) {
-      logger.debug({ jid, err }, 'Feishu setTyping error (non-fatal)');
+      logger.debug(
+        { jid, messageId, emoji, err },
+        'Feishu reactToMessage error (non-fatal)',
+      );
     }
   }
 

@@ -279,7 +279,13 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     }, IDLE_TIMEOUT);
   };
 
-  await channel.setTyping?.(chatJid, true);
+  // React to the last user message with OK emoji as acknowledgment
+  const lastMsg = missedMessages[missedMessages.length - 1];
+  if (lastMsg?.id && channel.reactToMessage) {
+    await channel.reactToMessage(chatJid, lastMsg.id, 'OK').catch(() => {});
+  } else {
+    await channel.setTyping?.(chatJid, true);
+  }
   let hadError = false;
   let outputSentToUser = false;
 
