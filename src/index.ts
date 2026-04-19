@@ -48,7 +48,7 @@ import {
 } from './db.js';
 import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
-import { startIpcWatcher } from './ipc.js';
+import { startIpcWatcher, flushGroupMessages } from './ipc.js';
 import { findChannel, formatMessages, formatOutbound } from './router.js';
 import {
   restoreRemoteControl,
@@ -286,6 +286,9 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   const output = await runAgent(group, prompt, chatJid, async (result) => {
     // Streaming output callback — called for each agent result
     if (result.result) {
+      // Flush pending verbose IPC messages before sending the final result,
+      // so they appear in order in the chat channel.
+      await flushGroupMessages(group.folder);
       const raw =
         typeof result.result === 'string'
           ? result.result

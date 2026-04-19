@@ -26,6 +26,49 @@ export interface IpcDeps {
 }
 
 let ipcWatcherRunning = false;
+let ipcDepsRef: IpcDeps | null = null;
+
+/**
+ * Flush all pending IPC messages for a specific group folder.
+ * Call this before sending the final result to ensure verbose messages
+ * arrive in order (they go through IPC files, while results go via stdout).
+ */
+export async function flushGroupMessages(groupFolder: string): Promise<void> {
+  if (!ipcDepsRef) return;
+  const ipcBaseDir = path.join(DATA_DIR, 'ipc');
+  const messagesDir = path.join(ipcBaseDir, groupFolder, 'messages');
+  if (!fs.existsSync(messagesDir)) return;
+
+  const registeredGroups = ipcDepsRef.registeredGroups();
+  const isMain = Object.values(registeredGroups).some(
+    (g) => g.folder === groupFolder && g.isMain,
+  );
+
+  const messageFiles = fs
+    .readdirSync(messagesDir)
+    .filter((f) => f.endsWith('.json'))
+    .sort(); // ensure chronological order by filename (timestamp-based)
+
+  for (const file of messageFiles) {
+    const filePath = path.join(messagesDir, file);
+    try {
+      const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+      if (data.type === 'message' && data.chatJid && data.text) {
+        const targetGroup = registeredGroups[data.chatJid];
+        if (isMain || (targetGroup && targetGroup.folder === groupFolder)) {
+          await ipcDepsRef.sendMessage(data.chatJid, data.text);
+          logger.info(
+            { chatJid: data.chatJid, sourceGroup: groupFolder },
+            'IPC message flushed',
+          );
+        }
+      }
+      fs.unlinkSync(filePath);
+    } catch (err) {
+      logger.error({ file, groupFolder, err }, 'Error flushing IPC message');
+    }
+  }
+}
 
 export function startIpcWatcher(deps: IpcDeps): void {
   if (ipcWatcherRunning) {
@@ -33,6 +76,7 @@ export function startIpcWatcher(deps: IpcDeps): void {
     return;
   }
   ipcWatcherRunning = true;
+  ipcDepsRef = deps;
 
   const ipcBaseDir = path.join(DATA_DIR, 'ipc');
   fs.mkdirSync(ipcBaseDir, { recursive: true });

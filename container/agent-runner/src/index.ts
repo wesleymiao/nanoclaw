@@ -580,11 +580,6 @@ async function runQuery(
       log(
         `Result #${resultCount}: subtype=${message.subtype}${textResult ? ` text=${textResult.slice(0, 200)}` : ''}`,
       );
-      // Brief delay so the host IPC poll (500ms) picks up any pending verbose
-      // messages before the result arrives via stdout — prevents out-of-order delivery.
-      if (containerInput.verbose) {
-        await new Promise(resolve => setTimeout(resolve, 800));
-      }
       writeOutput({
         status: 'success',
         result: textResult || null,
