@@ -445,6 +445,7 @@ async function runQuery(
 
   let newSessionId: string | undefined;
   let lastAssistantUuid: string | undefined;
+  let pendingVerboseTexts: string[] = [];
   let lastVerboseText: string | undefined;
   let messageCount = 0;
   let resultCount = 0;
@@ -536,19 +537,37 @@ async function runQuery(
         : message.type;
     log(`[msg #${messageCount}] type=${msgType}`);
 
+    // Verbose: flush buffered reasoning when we see a non-result message.
+    // If next message is 'result', the reasoning matches the final answer — drop it.
+    if (containerInput.verbose && pendingVerboseTexts.length > 0 && message.type !== 'result') {
+      for (const t of pendingVerboseTexts) {
+        writeVerboseMessage(containerInput.chatJid, containerInput.groupFolder, `💭 ${t}`);
+      }
+      pendingVerboseTexts = [];
+    } else if (message.type === 'result') {
+      pendingVerboseTexts = []; // drop — it's the final answer
+    }
+
     if (message.type === 'assistant' && 'uuid' in message) {
       lastAssistantUuid = (message as { uuid: string }).uuid;
 
-      // Verbose: emit reasoning text and tool use notifications
+      // Verbose: buffer reasoning text, emit tool use notifications immediately
       if (containerInput.verbose) {
         const content = (message as any).message?.content;
         if (Array.isArray(content)) {
+          const hasToolUse = content.some((b: any) => b.type === 'tool_use');
           for (const block of content) {
             if (block.type === 'text' && block.text?.trim()) {
               const text = block.text.trim();
               if (text !== lastVerboseText) {
                 lastVerboseText = text;
-                writeVerboseMessage(containerInput.chatJid, containerInput.groupFolder, `💭 ${text}`);
+                if (hasToolUse) {
+                  // Reasoning alongside tool calls — emit immediately
+                  writeVerboseMessage(containerInput.chatJid, containerInput.groupFolder, `💭 ${text}`);
+                } else {
+                  // Reasoning only — buffer it, might be the final answer
+                  pendingVerboseTexts.push(text);
+                }
               }
             }
             if (block.type === 'tool_use') {
