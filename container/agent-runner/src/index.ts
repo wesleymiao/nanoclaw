@@ -542,7 +542,7 @@ async function runQuery(
         if (Array.isArray(content)) {
           for (const block of content) {
             if (block.type === 'text' && block.text?.trim()) {
-              const text = block.text.trim().slice(0, 500);
+              const text = block.text.trim().slice(0, 2000);
               writeVerboseMessage(containerInput.chatJid, containerInput.groupFolder, `💭 ${text}`);
             }
             if (block.type === 'tool_use') {
@@ -580,6 +580,11 @@ async function runQuery(
       log(
         `Result #${resultCount}: subtype=${message.subtype}${textResult ? ` text=${textResult.slice(0, 200)}` : ''}`,
       );
+      // Brief delay so the host IPC poll (500ms) picks up any pending verbose
+      // messages before the result arrives via stdout — prevents out-of-order delivery.
+      if (containerInput.verbose) {
+        await new Promise(resolve => setTimeout(resolve, 800));
+      }
       writeOutput({
         status: 'success',
         result: textResult || null,
