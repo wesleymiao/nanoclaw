@@ -86,7 +86,7 @@ function formatToolNotification(name: string, input: any): string {
   };
   const icon = emoji[name] || '🔨';
   let preview = '';
-  if (name === 'Bash') preview = input?.command?.split('\n')[0]?.slice(0, 80) || '';
+  if (name === 'Bash') preview = input?.command?.slice(0, 500) || '';
   else if (name === 'Read') preview = input?.file_path || '';
   else if (name === 'Edit') preview = input?.file_path || '';
   else if (name === 'Write') preview = input?.file_path || '';
@@ -95,7 +95,7 @@ function formatToolNotification(name: string, input: any): string {
   else if (name === 'WebFetch') preview = input?.url || '';
   else if (name === 'Glob') preview = input?.pattern || '';
   else if (name === 'Agent') preview = input?.description || input?.prompt?.slice(0, 60) || '';
-  return `${icon} ${name}: ${preview || '...'}`.slice(0, 200);
+  return `${icon} ${name}: ${preview || '...'}`;
 }
 const IPC_INPUT_CLOSE_SENTINEL = path.join(IPC_INPUT_DIR, '_close');
 const IPC_POLL_MS = 500;
