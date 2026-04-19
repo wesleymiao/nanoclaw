@@ -445,6 +445,7 @@ async function runQuery(
 
   let newSessionId: string | undefined;
   let lastAssistantUuid: string | undefined;
+  let lastVerboseText: string | undefined;
   let messageCount = 0;
   let resultCount = 0;
 
@@ -545,7 +546,10 @@ async function runQuery(
           for (const block of content) {
             if (block.type === 'text' && block.text?.trim()) {
               const text = block.text.trim().slice(0, 2000);
-              writeVerboseMessage(containerInput.chatJid, containerInput.groupFolder, `💭 ${text}`);
+              if (text !== lastVerboseText) {
+                lastVerboseText = text;
+                writeVerboseMessage(containerInput.chatJid, containerInput.groupFolder, `💭 ${text}`);
+              }
             }
             if (block.type === 'tool_use') {
               const notification = formatToolNotification(block.name, block.input);
