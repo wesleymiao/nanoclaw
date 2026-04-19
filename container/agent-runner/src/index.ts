@@ -78,9 +78,37 @@ function writeVerboseMessage(chatJid: string, groupFolder: string, text: string)
   fs.renameSync(tmpPath, finalPath);
 }
 
+function formatEditDiff(input: any): string {
+  const filePath = input?.file_path || '';
+  const oldStr: string = input?.old_string || '';
+  const newStr: string = input?.new_string || '';
+  const oldLines = oldStr.split('\n');
+  const newLines = newStr.split('\n');
+  const added = newLines.length;
+  const removed = oldLines.length;
+  const fileName = filePath.split('/').pop() || filePath;
+
+  let header = `✏️ Edit: ${filePath} (+${added} -${removed})`;
+
+  // Build diff preview, cap at 10 lines total
+  const diffLines: string[] = [];
+  for (const line of oldLines) {
+    if (diffLines.length >= 10) { diffLines.push('  ...'); break; }
+    diffLines.push(`- ${line}`);
+  }
+  for (const line of newLines) {
+    if (diffLines.length >= 10) { diffLines.push('  ...'); break; }
+    diffLines.push(`+ ${line}`);
+  }
+
+  return header + '\n' + diffLines.join('\n');
+}
+
 function formatToolNotification(name: string, input: any): string {
+  if (name === 'Edit') return formatEditDiff(input);
+
   const emoji: Record<string, string> = {
-    Bash: '🔧', Read: '📄', Write: '📝', Edit: '✏️',
+    Bash: '🔧', Read: '📄', Write: '📝',
     Glob: '📂', Grep: '🔍', WebSearch: '🌐', WebFetch: '🌐',
     Agent: '🤖', NotebookEdit: '📓',
   };
@@ -88,7 +116,6 @@ function formatToolNotification(name: string, input: any): string {
   let preview = '';
   if (name === 'Bash') preview = input?.command?.slice(0, 500) || '';
   else if (name === 'Read') preview = input?.file_path || '';
-  else if (name === 'Edit') preview = input?.file_path || '';
   else if (name === 'Write') preview = input?.file_path || '';
   else if (name === 'Grep') preview = `"${input?.pattern || ''}"` + (input?.path ? ` in ${input.path}` : '');
   else if (name === 'WebSearch') preview = input?.query || '';
