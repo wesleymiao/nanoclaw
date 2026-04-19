@@ -40,6 +40,8 @@ export class FeishuChannel implements Channel {
   private processedMessages = new Set<string>();
   /** Track "working on it" message IDs per chat for deletion */
   private workingMessageId = new Map<string, string>();
+  /** Cache user open_id → display name */
+  private userNameCache = new Map<string, string>();
   private opts: FeishuChannelOpts;
   private dispatcher: lark.EventDispatcher;
 
@@ -93,6 +95,23 @@ export class FeishuChannel implements Channel {
       return (resp as any)?.data?.name || null;
     } catch (err) {
       logger.warn({ chatId, err }, 'Feishu: failed to resolve chat name');
+      return null;
+    }
+  }
+
+  private async resolveUserName(openId: string): Promise<string | null> {
+    const cached = this.userNameCache.get(openId);
+    if (cached) return cached;
+    try {
+      const resp = await this.client.contact.user.get({
+        path: { user_id: openId },
+        params: { user_id_type: 'open_id' },
+      });
+      const name = (resp as any)?.data?.user?.name || null;
+      if (name) this.userNameCache.set(openId, name);
+      return name;
+    } catch (err) {
+      logger.warn({ openId, err }, 'Feishu: failed to resolve user name');
       return null;
     }
   }
@@ -210,8 +229,8 @@ export class FeishuChannel implements Channel {
     if (isBotMessage) {
       senderName = ASSISTANT_NAME;
     } else {
-      // Use sender_id directly — contact API requires extra permissions
-      senderName = sender?.sender_id?.open_id || 'unknown';
+      // Resolve display name from Feishu contact API
+      senderName = await this.resolveUserName(senderId) || senderId;
     }
 
     // Translate @mentions to trigger pattern
