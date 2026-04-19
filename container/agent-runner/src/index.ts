@@ -535,7 +535,10 @@ async function runQuery(
       message.type === 'system'
         ? `system/${(message as { subtype?: string }).subtype}`
         : message.type;
-    log(`[msg #${messageCount}] type=${msgType}`);
+    log(`[msg #${messageCount}] type=${msgType}, keys=${Object.keys(message).join(',')}`);
+    if (message.type === 'assistant') {
+      log(`[msg #${messageCount}] assistant hasUuid=${'uuid' in message}, hasParentToolUseId=${'parent_tool_use_id' in message}`);
+    }
 
     // Verbose: flush buffered reasoning when we see a non-result message.
     // If next message is 'result', the reasoning matches the final answer — drop it.
@@ -553,10 +556,20 @@ async function runQuery(
 
       // Verbose: buffer reasoning text, emit tool use notifications immediately
       if (containerInput.verbose) {
-        const content = (message as any).message?.content;
+        const content = (message as any).message?.content || (message as any).content;
+        log(`[verbose] assistant content type: ${Array.isArray(content) ? `array(${content.length})` : typeof content}, keys: ${Object.keys(message).join(',')}`);
         if (Array.isArray(content)) {
+          log(`[verbose] block types: ${content.map((b: any) => `${b.type}${b.type === 'text' ? `(${(b.text || '').slice(0, 50)})` : b.type === 'tool_use' ? `(${b.name})` : b.type === 'thinking' ? `(${(b.thinking || '').slice(0, 50)})` : ''}`).join(', ')}`);
           const hasToolUse = content.some((b: any) => b.type === 'tool_use');
           for (const block of content) {
+            // Handle thinking blocks (extended thinking) — always emit immediately
+            if (block.type === 'thinking' && block.thinking?.trim()) {
+              const text = block.thinking.trim();
+              if (text !== lastVerboseText) {
+                lastVerboseText = text;
+                writeVerboseMessage(containerInput.chatJid, containerInput.groupFolder, `💭 ${text}`);
+              }
+            }
             if (block.type === 'text' && block.text?.trim()) {
               const text = block.text.trim();
               if (text !== lastVerboseText) {
@@ -702,7 +715,7 @@ async function main(): Promise<void> {
     } catch {
       /* may not exist */
     }
-    log(`Received input for group: ${containerInput.groupFolder}`);
+    log(`Received input for group: ${containerInput.groupFolder} (verbose: ${containerInput.verbose})`);
   } catch (err) {
     writeOutput({
       status: 'error',

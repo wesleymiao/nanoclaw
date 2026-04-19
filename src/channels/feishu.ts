@@ -230,7 +230,7 @@ export class FeishuChannel implements Channel {
       senderName = ASSISTANT_NAME;
     } else {
       // Resolve display name from Feishu contact API
-      senderName = await this.resolveUserName(senderId) || senderId;
+      senderName = (await this.resolveUserName(senderId)) || senderId;
     }
 
     // Translate @mentions to trigger pattern
