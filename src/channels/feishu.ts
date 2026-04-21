@@ -99,6 +99,63 @@ export class FeishuChannel implements Channel {
     }
   }
 
+  /**
+   * Download an image from a Feishu message and save to the group's workspace.
+   * Returns the container-relative path (/workspace/group/uploads/...) or null on failure.
+   */
+  private async downloadImage(jid: string, message: any): Promise<string | null> {
+    try {
+      const messageId = message.message_id;
+      let imageKey = '';
+      try {
+        const parsed = JSON.parse(message.content);
+        imageKey = parsed.image_key || '';
+      } catch {}
+      if (!imageKey) return null;
+
+      // Resolve group folder
+      const groups = this.opts.registeredGroups();
+      const group = groups[jid];
+      if (!group) return null;
+
+      const uploadsDir = path.join(GROUPS_DIR, group.folder, 'uploads');
+      fs.mkdirSync(uploadsDir, { recursive: true });
+
+      const filename = `img-${Date.now()}.png`;
+      const hostPath = path.join(uploadsDir, filename);
+
+      // Download via Feishu message resource API
+      const resp = await (this.client as any).im.messageResource.get({
+        path: { message_id: messageId, file_key: imageKey },
+        params: { type: 'image' },
+      });
+
+      // resp.data is a readable stream or buffer
+      const data = resp?.data;
+      if (!data) return null;
+
+      if (Buffer.isBuffer(data)) {
+        fs.writeFileSync(hostPath, data);
+      } else if (typeof data.pipe === 'function') {
+        // Readable stream
+        await new Promise<void>((resolve, reject) => {
+          const ws = fs.createWriteStream(hostPath);
+          data.pipe(ws);
+          ws.on('finish', resolve);
+          ws.on('error', reject);
+        });
+      } else {
+        return null;
+      }
+
+      logger.info({ jid, messageId, filename }, 'Feishu image downloaded');
+      return `/workspace/group/uploads/${filename}`;
+    } catch (err) {
+      logger.warn({ jid, err }, 'Feishu: failed to download image');
+      return null;
+    }
+  }
+
   private async resolveUserName(openId: string): Promise<string | null> {
     const cached = this.userNameCache.get(openId);
     if (cached) return cached;
@@ -210,6 +267,14 @@ export class FeishuChannel implements Channel {
         content = parsed.text || '';
       } catch {
         content = message.content || '';
+      }
+    } else if (msgType === 'image') {
+      // Download image and save to group workspace for agent to Read
+      const imagePath = await this.downloadImage(jid, message);
+      if (imagePath) {
+        content = `[User sent an image: ${imagePath}]\nUse the Read tool to view this image.`;
+      } else {
+        content = '[image message - failed to download]';
       }
     } else {
       // For non-text messages, note the type
