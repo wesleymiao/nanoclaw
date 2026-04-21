@@ -1,0 +1,454 @@
+================================================================================
+  NANOCLAW CHANNEL SYSTEM: EXPLORATION SUMMARY
+================================================================================
+
+THOROUGHNESS LEVEL: Medium ✓
+
+Explored:
+  ✓ src/channels/registry.ts     - Self-registration pattern
+  ✓ src/types.ts                 - Channel interface & message types
+  ✓ src/channels/index.ts        - Channel loading (barrel file)
+  ✓ src/channels/slack.ts        - Slack implementation (410 lines)
+  ✓ src/channels/feishu.ts       - Feishu implementation (526 lines)
+  ✓ CONTRIBUTING.md              - Skill types and PR guidelines
+  ✓ .claude/skills/add-slack/    - Skill-based channel addition pattern
+
+Generated Documentation:
+  → /home/azureuser/nanoclaw/nanoclaw_channel_system.md     (30KB - comprehensive)
+  → /home/azureuser/nanoclaw/channel_architecture_summary.md (12KB - quick ref)
+
+================================================================================
+  KEY FINDINGS
+================================================================================
+
+1. SELF-REGISTRATION PATTERN
+   ────────────────────────
+   • Channels register via side-effect at module load (no explicit init)
+   • Each channel module ends with: registerChannel('name', factory)
+   • Factory pattern: (ChannelOpts) => Channel | null
+   • Returns null if credentials missing → gracefully disabled
+   
+   Flow:
+     import './slack.js'  →  registerChannel('slack', ...)  →  registry.set(...)
+
+2. CORE INTERFACES
+   ────────────────
+   
+   Channel Interface (required methods):
+     - connect(): Promise<void>              Start listening
+     - sendMessage(jid, text): Promise<void> Send message to platform
+     - isConnected(): boolean                Status check
+     - ownsJid(jid): boolean                 JID ownership (routing)
+     - disconnect(): Promise<void>           Clean shutdown
+   
+   Optional Methods (feature detection):
+     - setTyping?(jid, isTyping): Promise<void>
+     - reactToMessage?(jid, msgId, emoji): Promise<void>
+     - syncGroups?(force): Promise<void>
+   
+   NewMessage Type (what channels deliver):
+     {
+       id: string                           Platform message ID
+       chat_jid: string                     "slack:C123" or "feishu:oc_xxx"
+       sender: string                       Platform user ID
+       sender_name: string                  Resolved human name
+       content: string                      Text (mentions pre-translated)
+       timestamp: string                    ISO 8601
+       is_from_me: boolean                  Bot's own message?
+       is_bot_message: boolean              Redundant with is_from_me
+     }
+
+3. MESSAGE FLOW
+   ────────────
+   User Message:
+     Platform Event
+       → Channel event handler parses it
+       → Translates platform mentions to @ASSISTANT_NAME
+       → Distinguishes bot messages (avoid loops)
+       → Resolves sender names
+       → Calls opts.onMessage(jid, NewMessage)
+       → Core routes to agent (if registered + trigger matches)
+       → Agent generates response
+   
+   Bot Response:
+     Core → channel.sendMessage(jid, text)
+       → Channel extracts file references (markdown images)
+       → Uploads files to platform
+       → Chunks message if exceeds platform limits
+       → Queues on network error, retries on reconnect
+
+4. JIDS (JABBER IDS)
+   ─────────────────
+   Each platform defines its own prefix:
+     slack:C0123456789      ← Slack channel ID
+     feishu:oc_xxx          ← Feishu chat ID
+     whatsapp:1234567890    ← WhatsApp phone
+     telegram:123456789     ← Telegram chat ID
+   
+   Used as:
+     - Database key for group registration
+     - Routing identifier passed to channel.sendMessage(jid, text)
+     - Filter passed to channel.ownsJid(jid) for dispatch
+
+5. SLACK IMPLEMENTATION (410 lines)
+   ────────────────────────────────
+   Connection Type: Socket Mode (WebSocket, no public URL needed)
+   Credentials: SLACK_BOT_TOKEN, SLACK_APP_TOKEN
+   
+   Key Features:
+     • Message filtering: ignores non-text, bot subtypes (dedup loop protection)
+     • Mention translation: <@BOTID> → @ASSISTANT_NAME
+     • User name caching: LRU cache of user ID → display name
+     • Message queuing: holds outbound messages if disconnected
+     • Message chunking: splits >4000 char messages
+     • File upload: extracts ![alt](path) and uploads via filesUploadV2()
+     • Typing indicator: fake via "⏳ Working on it..." message (API doesn't expose)
+     • Metadata sync: proactively fetches channel names on startup
+   
+   Limitations:
+     • Threads are flattened (threaded replies appear as channel messages)
+     • No true typing indicator (uses fake message)
+     • Message splitting is naive (breaks mid-word)
+
+6. FEISHU IMPLEMENTATION (526 lines)
+   ────────────────────────────────
+   Connection Type: HTTP + WebSocket via SDK
+   Credentials: FEISHU_APP_ID, FEISHU_APP_SECRET
+   
+   Key Features (different from Slack):
+     • AUTO-REGISTRATION: creates folder + registers on first message
+     • Webhook deduplication: tracks message IDs (Feishu re-pushes within 3s)
+     • JSON message format: sends {text: "..."} instead of plain text
+     • Emoji reactions: implements reactToMessage() (Slack doesn't)
+     • Separate file types: images uploaded via image.create(), files via file.create()
+     • Mention translation: <at user_id="...">name</at> → @ASSISTANT_NAME
+     • No typing indicator: no-op (no native API)
+   
+   Contrast with Slack:
+     • MANUAL registration (pre-register in setup)     vs AUTO (first message)
+     • Message on demand (sync on startup)             vs ON-DEMAND (per chat)
+     • Flat messages (WebSocket, no dedup needed)     vs DEDUPLICATED (webhook re-push)
+
+7. CHANNEL LOADING (index.ts)
+   ──────────────────────────
+   Barrel File Pattern:
+   ```
+   // src/channels/index.ts
+   // Comment: each import triggers registerChannel() call
+   
+   import './feishu.js';   ← triggers: registerChannel('feishu', factory)
+   import './slack.js';    ← triggers: registerChannel('slack', factory)
+   
+   // On disk but commented out (placeholder for future):
+   // discord, gmail, telegram, whatsapp
+   ```
+   
+   Benefits:
+     • Single import point (index.ts) enables/disables all channels
+     • Side-effects at module load (no explicit orchestration needed)
+     • Graceful degradation (missing credentials → null → skipped)
+     • Extensible (add new channel = add one line)
+
+8. REGISTRY API
+   ────────────
+   
+   registerChannel(name, factory)
+     Registers a channel factory in the global registry
+   
+   getChannelFactory(name): ChannelFactory | undefined
+     Retrieves a factory for instantiation
+   
+   getRegisteredChannelNames(): string[]
+     Lists all registered channel names (for discovery/UI)
+   
+   Factory Signature:
+     (opts: ChannelOpts) => Channel | null
+     
+     ChannelOpts {
+       onMessage: OnInboundMessage      // Callback to deliver inbound messages
+       onChatMetadata: OnChatMetadata   // Callback for group discovery
+       registeredGroups: () => Record<string, RegisteredGroup>  // Live groups lookup
+     }
+
+9. OPTIONAL CAPABILITIES PATTERN
+   ──────────────────────────────
+   Channels implement optional methods:
+   
+   Core code safely checks before calling:
+     if (channel.setTyping) {
+       await channel.setTyping(jid, true);
+     }
+     
+     if (channel.reactToMessage) {
+       await channel.reactToMessage(jid, msgId, '👍');
+     }
+   
+   Benefits:
+     • No crashes if method missing
+     • Features can be selective (Feishu has reactions, Slack doesn't)
+     • Extensible (add new optional method → check at call site)
+
+10. SKILL-BASED CHANNEL ADDITION (.claude/skills/add-slack/)
+    ──────────────────────────────────────────────────────────
+    Five-Phase Approach:
+    
+    Phase 1: Pre-flight
+      • Check if src/channels/slack.ts already exists
+      • Ask user for existing credentials (optional)
+    
+    Phase 2: Apply Code Changes
+      • git remote add + git merge from upstream skill branch
+      • Validates with npm build + tests
+    
+    Phase 3: Setup
+      • User creates bot on platform (Slack app creation)
+      • Gets API tokens (BOT_TOKEN, APP_TOKEN)
+      • Adds to .env + syncs to data/env/env
+    
+    Phase 4: Registration
+      • User gets channel ID from platform
+      • Calls npx tsx setup/index.ts --step register with JID
+    
+    Phase 5: Verify
+      • User sends test message
+      • Bot should respond
+      • Logs checked if failing
+    
+    Key Pattern:
+      • Merges skill branch (with full implementation)
+      • No in-Claude code changes
+      • Interactive setup walks user through platform-specific steps
+
+================================================================================
+  CODE SNIPPET EXAMPLES
+================================================================================
+
+Self-Registration (end of slack.ts):
+─────────────────────────────────────
+  registerChannel('slack', (opts: ChannelOpts) => {
+    const env = readEnvFile(['SLACK_BOT_TOKEN', 'SLACK_APP_TOKEN']);
+    if (!env.SLACK_BOT_TOKEN || !env.SLACK_APP_TOKEN) {
+      logger.warn('Slack: SLACK_BOT_TOKEN or SLACK_APP_TOKEN not set');
+      return null;  // Gracefully disabled
+    }
+    return new SlackChannel(opts);
+  });
+
+Channel Message Handler (Slack):
+────────────────────────────────
+  private setupEventHandlers(): void {
+    this.app.event('message', async ({ event }) => {
+      const subtype = (event as { subtype?: string }).subtype;
+      if (subtype && subtype !== 'bot_message') return;  // Filter
+      
+      const msg = event as HandledMessageEvent;
+      if (!msg.text) return;
+      
+      const jid = `slack:${msg.channel}`;
+      const timestamp = new Date(parseFloat(msg.ts) * 1000).toISOString();
+      const isGroup = msg.channel_type !== 'im';
+      
+      // Report for discovery
+      this.opts.onChatMetadata(jid, timestamp, undefined, 'slack', isGroup);
+      
+      // Only deliver for registered groups
+      const groups = this.opts.registeredGroups();
+      if (!groups[jid]) return;
+      
+      const isBotMessage = !!msg.bot_id || msg.user === this.botUserId;
+      let senderName = isBotMessage ? ASSISTANT_NAME : await this.resolveUserName(msg.user);
+      
+      // Translate mention: <@BOTID> → @ASSISTANT_NAME
+      let content = msg.text;
+      if (this.botUserId && !isBotMessage) {
+        const mentionPattern = `<@${this.botUserId}>`;
+        if (content.includes(mentionPattern) && !TRIGGER_PATTERN.test(content)) {
+          content = `@${ASSISTANT_NAME} ${content}`;
+        }
+      }
+      
+      this.opts.onMessage(jid, {
+        id: msg.ts,
+        chat_jid: jid,
+        sender: msg.user || '',
+        sender_name: senderName,
+        content,
+        timestamp,
+        is_from_me: isBotMessage,
+      });
+    });
+  }
+
+Feishu Auto-Registration (in handleMessage):
+────────────────────────────────────────────
+  let groups = this.opts.registeredGroups();
+  if (!groups[jid]) {
+    const chatName = (await this.resolveChatName(chatId)) || chatId;
+    const folder = `feishu_${safeName}`;
+    
+    const group: RegisteredGroup = {
+      name: chatName,
+      folder,
+      trigger: `@${ASSISTANT_NAME}`,
+      added_at: new Date().toISOString(),
+      requiresTrigger: false,
+    };
+    
+    setRegisteredGroup(jid, group);
+    
+    // Create folder + copy CLAUDE.md template
+    fs.mkdirSync(path.join(GROUPS_DIR, folder), { recursive: true });
+    // ... copy template
+    
+    // Refresh groups in-memory
+    const freshGroups = getAllRegisteredGroups();
+    Object.assign(groups, freshGroups);
+  }
+
+Message Queuing & Flushing (both Slack & Feishu):
+─────────────────────────────────────────────────
+  async sendMessage(jid: string, text: string): Promise<void> {
+    if (!this.connected) {
+      this.outgoingQueue.push({ jid, text });
+      logger.info({ jid, queueSize: this.outgoingQueue.length }, 'Queued');
+      return;
+    }
+    // ... send via API
+  }
+  
+  async connect(): Promise<void> {
+    await this.wsClient.start(...);
+    this.connected = true;
+    await this.flushOutgoingQueue();
+  }
+  
+  private async flushOutgoingQueue(): Promise<void> {
+    while (this.outgoingQueue.length > 0) {
+      const item = this.outgoingQueue.shift()!;
+      // ... retry send
+    }
+  }
+
+File Reference Extraction (used by both):
+────────────────────────────────────────
+  private extractFileReferences(jid: string, text: string) {
+    const filePaths: string[] = [];
+    const imgPattern = /!\[[^\]]*\]\(([^)]+)\)/g;
+    
+    let cleanText = text.replace(imgPattern, (_, filePath: string) => {
+      const hostPath = this.resolveContainerPath(jid, filePath.trim());
+      if (hostPath) {
+        filePaths.push(hostPath);
+        return '';  // Remove markdown reference
+      }
+      return _;
+    });
+    
+    cleanText = cleanText.replace(/\n{3,}/g, '\n\n').trim();
+    return { cleanText, filePaths };
+  }
+
+================================================================================
+  CONTRIBUTING.md GUIDELINES (KEY EXCERPTS)
+================================================================================
+
+Skill Types:
+  1. Feature Skills (branch-based)     → New channels, major features
+  2. Utility Skills (with code files)  → Standalone tools (e.g., /claw CLI)
+  3. Operational Skills (instruction)  → Pure workflows (/setup, /debug)
+  4. Container Skills (agent runtime)  → Skills that run inside container
+
+For New Channels:
+  • Must be skill-based (not source code change)
+  • Create feature skill on skill/<name> branch
+  • Include SKILL.md with 5-phase interactive setup
+  • Test on fresh clone before PR
+
+PR Requirements:
+  • One thing per PR (one bug fix, one skill, one simplification)
+  • Bug fixes: source code only
+  • Features: skills only
+  • Tested thoroughly
+  • Clear description (3-4 sentences)
+
+================================================================================
+  ARCHITECTURE HIGHLIGHTS
+================================================================================
+
+Strengths:
+  ✓ Zero configuration — credentials disable/enable channels automatically
+  ✓ Extensible — add new platform = add 1 file + 1 import line
+  ✓ Modular — channels are independent, no cross-channel dependencies
+  ✓ Graceful degradation — missing credentials don't crash the system
+  ✓ Callback-based — channels push messages to core (not polling)
+  ✓ Optional capabilities — core safely checks for advanced methods
+  ✓ Unified message format — all platforms map to NewMessage type
+  ✓ Live group lookup — registeredGroups() is a callback, not a snapshot
+  ✓ Deduplication — handles platform-specific retry mechanics (Feishu)
+  ✓ Message queuing — handles network failures gracefully
+
+Known Limitations:
+  • Slack threads are flattened (responses go to channel, not thread)
+  • Slack typing indicator unavailable (faked with "Working on it..." message)
+  • Message length limits require chunking (naive split, breaks mid-word)
+  • File handling requires markdown reference format (implicit contract)
+  • Metadata sync unbounded (no timeout for large workspaces)
+  • Credential security via readEnvFile() not foolproof
+
+================================================================================
+  CHECKLIST FOR ADDING A NEW CHANNEL
+================================================================================
+
+Code:
+  ☐ Create src/channels/myplatform.ts
+  ☐ Implement Channel interface (5 required + 3 optional methods)
+  ☐ Read credentials via readEnvFile(['MYPLATFORM_...'])
+  ☐ End with registerChannel('myplatform', factory)
+  ☐ Add import './myplatform.js' to src/channels/index.ts
+  ☐ Handle platform event parsing → NewMessage mapping
+  ☐ Translate platform mentions to @ASSISTANT_NAME
+  ☐ Distinguish bot messages (avoid loops)
+  ☐ Call opts.onMessage(jid, message) for registered groups
+  ☐ Implement message queuing + flush on connect
+  ☐ Extract file references + upload natively
+
+Skill (Feature Branch):
+  ☐ Create .claude/skills/add-myplatform/SKILL.md
+  ☐ Phase 1: Pre-flight (check credentials, ask user)
+  ☐ Phase 2: Merge skill branch (fetch + merge from upstream)
+  ☐ Phase 3: Setup (user creates app, gets tokens)
+  ☐ Phase 4: Registration (user registers channels)
+  ☐ Phase 5: Verify (test with user)
+  ☐ Test on fresh clone
+  ☐ All npm build + tests pass
+
+Documentation:
+  ☐ SKILL.md < 500 lines (reference other files if needed)
+  ☐ Troubleshooting section in SKILL.md
+  ☐ Known limitations documented
+  ☐ JID format explained to user
+
+================================================================================
+  REFERENCES
+================================================================================
+
+Generated Documentation:
+  1. nanoclaw_channel_system.md (30KB)
+     - Comprehensive deep dive with all code patterns
+     - 6 major sections + 8 pattern details
+  
+  2. channel_architecture_summary.md (12KB)
+     - Quick reference card
+     - Diagrams, comparisons, snippets
+     - Checklists
+
+Source Files Explored:
+  • src/types.ts              (116 lines - interfaces)
+  • src/channels/registry.ts  (29 lines  - factory pattern)
+  • src/channels/index.ts     (17 lines  - barrel file)
+  • src/channels/slack.ts     (410 lines - full implementation)
+  • src/channels/feishu.ts    (526 lines - full implementation)
+  • CONTRIBUTING.md           (148 lines - skill guidelines)
+  • .claude/skills/add-slack/SKILL.md (208 lines - skill pattern)
+
+================================================================================

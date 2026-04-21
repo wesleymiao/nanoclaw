@@ -611,6 +611,9 @@ async function runQuery(
               }
             }
             if (block.type === 'tool_use') {
+              if (block.name === 'Edit') {
+                log(`[verbose] Edit input keys: ${Object.keys(block.input || {}).join(',')}, has old_string: ${!!block.input?.old_string}, has new_string: ${!!block.input?.new_string}`);
+              }
               const notification = formatToolNotification(block.name, block.input);
               writeVerboseMessage(containerInput.chatJid, containerInput.groupFolder, notification);
             }

@@ -1,0 +1,250 @@
+================================================================================
+CLAUDE AGENT SDK MESSAGE TYPES - COMPREHENSIVE ANALYSIS
+================================================================================
+
+PROJECT: NanoClaw (/home/azureuser/nanoclaw)
+SDK VERSION: @anthropic-ai/claude-agent-sdk@0.2.92
+ANALYSIS DATE: April 18, 2026
+
+================================================================================
+EXECUTIVE SUMMARY
+================================================================================
+
+The Claude Agent SDK emits 23 distinct message types through an async iterable
+interface. These messages allow you to track everything the agent does in
+real-time, from tool invocations to background tasks to API errors.
+
+KEY FINDING: The agent-runner currently captures only 4 out of 23 message types:
+  ✓ system/init
+  ✓ assistant
+  ✓ system/task_notification  
+  ✓ result
+
+This leaves 19 unobserved message types that could surface intermediate actions!
+
+================================================================================
+MESSAGE TYPES BREAKDOWN (23 Total)
+================================================================================
+
+CORE MESSAGES (3)
+  1. SDKAssistantMessage - Claude's responses with content blocks
+  2. SDKUserMessage - User input or synthetic messages
+  3. SDKUserMessageReplay - Historical messages on session resume
+
+STREAMING (1)
+  4. SDKPartialAssistantMessage - Streaming deltas and events
+
+RESULTS (2)
+  5. SDKResultSuccess - Successful completion with metrics
+  6. SDKResultError - Failure with error details
+
+TOOL EXECUTION (2) ⭐ CRITICAL FOR INTERMEDIATE ACTIONS
+  7. SDKToolProgressMessage - Periodic updates during tool execution
+  8. SDKToolUseSummaryMessage - High-level summaries of completed tools
+
+SYSTEM EVENTS (8)
+  9. SDKSystemMessage - Session initialization
+ 10. SDKStatusMessage - Status updates (e.g., compacting)
+ 11. SDKAPIRetryMessage - API errors and retry info
+ 12. SDKCompactBoundaryMessage - Context compaction markers
+ 13. SDKSessionStateChangedMessage - State transitions
+ 14. SDKAuthStatusMessage - Authentication events
+ 15. SDKLocalCommandOutputMessage - Local command output
+ 16. SDKFilesPersistedEvent - File operation completion
+
+BACKGROUND TASKS (3)
+ 17. SDKTaskStartedMessage - Task begins
+ 18. SDKTaskProgressMessage - Periodic task progress
+ 19. SDKTaskNotificationMessage - Task completion/failure
+
+HOOKS (3)
+ 20. SDKHookStartedMessage - Hook execution begins
+ 21. SDKHookProgressMessage - Hook output
+ 22. SDKHookResponseMessage - Hook completion
+
+UTILITY (2)
+ 23. SDKRateLimitEvent - Rate limit status
+ 24. SDKElicitationCompleteMessage - MCP elicitation done
+ 25. SDKPromptSuggestionMessage - AI-predicted next prompt
+
+================================================================================
+SUPPORTED TOOLS (Via Tool Use Events)
+================================================================================
+
+File Operations:
+  • Read - Read file contents
+  • Write - Create/write files
+  • Edit - Modify file contents
+  • Glob - Pattern-based file matching
+
+Search & Web:
+  • Grep - Text search in files
+  • WebSearch - Web search
+  • WebFetch - Fetch web content
+
+Execution:
+  • Bash - Execute shell commands
+
+Task Management:
+  • Task - Create/manage tasks
+  • TaskOutput - Get task output
+  • TaskStop - Stop tasks
+  • TeamCreate/TeamDelete - Agent team management
+
+Utilities:
+  • Skill - Invoke skills
+  • SendMessage - Send messages
+  • TodoWrite - Manage todo lists
+  • NotebookEdit - Edit notebooks
+
+Custom:
+  • mcp__nanoclaw__* - Custom MCP tools
+
+================================================================================
+KEY FINDING: HOW TO DETECT INTERMEDIATE ACTIONS
+================================================================================
+
+1. TOOL INVOCATIONS
+   WHERE: SDKAssistantMessage.message.content[].tool_use
+   WHAT: Every tool the agent decides to run
+   EXAMPLE:
+   {
+     type: 'tool_use',
+     id: 'call_1',
+     name: 'Bash',
+     input: { command: 'find . -name "*.ts"' }
+   }
+
+2. TOOL PROGRESS
+   WHERE: SDKToolProgressMessage
+   WHAT: Periodic updates while tool executes (every few seconds)
+   EXAMPLE:
+   {
+     type: 'tool_progress',
+     tool_name: 'Bash',
+     tool_use_id: 'call_1',
+     elapsed_time_seconds: 2.3
+   }
+
+3. TOOL SUMMARIES
+   WHERE: SDKToolUseSummaryMessage
+   WHAT: Natural language summary of tool batch completion
+   EXAMPLE:
+   {
+     type: 'tool_use_summary',
+     summary: 'Executed 2 bash commands to find files',
+     preceding_tool_use_ids: ['call_1', 'call_2']
+   }
+
+4. BACKGROUND TASKS
+   WHERE: SDKTaskStartedMessage → SDKTaskProgressMessage → SDKTaskNotificationMessage
+   WHAT: Multi-step background operations
+   
+5. SESSION STATE
+   WHERE: SDKSessionStateChangedMessage
+   WHAT: idle/running/requires_action transitions
+
+6. ERROR CONTEXT
+   WHERE: SDKAPIRetryMessage
+   WHAT: When and why API calls fail
+
+================================================================================
+CURRENT vs. POTENTIAL COVERAGE
+================================================================================
+
+Currently Captured in agent-runner:
+  ✓ Assistant responses (tool invocations are hidden inside)
+  ✓ Session initialization
+  ✓ Task notifications (completion only)
+  ✓ Final results
+
+NOT Captured (Opportunities):
+  ✗ Tool progress (Would show "Running Bash 5s...")
+  ✗ Tool summaries (Would show "Executed 3 tools")
+  ✗ Session state changes (Would show idle/running)
+  ✗ API retries (Would show failures with context)
+  ✗ Task progress (Would show live updates)
+  ✗ File persistence (Would confirm file ops)
+  ✗ Rate limit events (Would warn of throttling)
+  ✗ Compaction boundaries (Would indicate context limits)
+  ✗ Hook events (Would show automation execution)
+
+================================================================================
+DELIVERABLES (Generated in /home/azureuser/nanoclaw/)
+================================================================================
+
+1. CLAUDE_AGENT_SDK_MESSAGE_TYPES.md (21 KB)
+   → Complete reference with full TypeScript definitions
+   → Every message type with all fields documented
+   → Common patterns and code examples
+
+2. CLAUDE_AGENT_SDK_QUICK_REFERENCE.md (4.9 KB)
+   → One-page cheat sheet
+   → Message frequency (high/medium/low)
+   → Quick detection patterns
+   → Which tools are available
+
+3. INTERMEDIATE_ACTIONS_GUIDE.md (10 KB)
+   → How to observe intermediate actions
+   → Code examples for each action type
+   → Complete flow example
+   → Integration opportunities for NanoClaw
+
+4. SDK_MESSAGE_TYPES_SUMMARY.txt (THIS FILE)
+   → Executive summary and quick reference
+
+================================================================================
+RECOMMENDATIONS FOR NANOCLAW
+================================================================================
+
+SHORT TERM (Show intermediate actions):
+  1. Add SDKToolProgressMessage handling
+     → Display "🔧 Running: {tool_name} ({elapsed_time}s)"
+  
+  2. Add SDKToolUseSummaryMessage handling
+     → Display "✅ {summary}"
+  
+  3. Add SDKSessionStateChangedMessage handling
+     → Display state: "🔄 Agent processing..." / "⏸️ Idle"
+
+MEDIUM TERM (Enhance visibility):
+  4. Add SDKTaskProgressMessage → Live task updates
+  5. Add SDKAPIRetryMessage → Show failures
+  6. Add SDKRateLimitEvent → Warn on throttling
+
+LONG TERM (Advanced features):
+  7. Add SDKCompactBoundaryMessage → Context metrics
+  8. Add SDKHookMessages → Automation visibility
+  9. Add SDKFilesPersistedEvent → File op confirmation
+
+================================================================================
+QUICK IMPLEMENTATION GUIDE
+================================================================================
+
+To capture tool invocations in current code:
+
+  if (message.type === 'assistant') {
+    message.message.content?.forEach(block => {
+      if (block.type === 'tool_use') {
+        log(`Tool: ${block.name}, ID: ${block.id}`);
+        // Send to WhatsApp/Telegram: "🔧 Running: {tool_name}"
+      }
+    });
+  }
+
+To track tool progress:
+
+  if (message.type === 'tool_progress') {
+    log(`Tool ${message.tool_name} elapsed: ${message.elapsed_time_seconds}s`);
+    // Send to WhatsApp/Telegram: "⏳ {tool_name} ({elapsed}s)"
+  }
+
+To show task progress:
+
+  if (message.type === 'system' && message.subtype === 'task_progress') {
+    log(`Task progress: tokens=${message.usage.total_tokens}, ` +
+        `tools=${message.usage.tool_uses}`);
+    // Send to WhatsApp/Telegram: "📈 {description}"
+  }
+
+================================================================================

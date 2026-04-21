@@ -538,13 +538,19 @@ async function startMessageLoop(): Promise<void> {
               channel
                 .reactToMessage(chatJid, lastPiped.id, 'OK')
                 .catch((err) =>
-                  logger.warn({ chatJid, err }, 'Failed to react to piped message'),
+                  logger.warn(
+                    { chatJid, err },
+                    'Failed to react to piped message',
+                  ),
                 );
             } else {
               channel
                 .setTyping?.(chatJid, true)
                 ?.catch((err) =>
-                  logger.warn({ chatJid, err }, 'Failed to set typing indicator'),
+                  logger.warn(
+                    { chatJid, err },
+                    'Failed to set typing indicator',
+                  ),
                 );
             }
           } else {
