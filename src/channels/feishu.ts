@@ -103,7 +103,10 @@ export class FeishuChannel implements Channel {
    * Download an image from a Feishu message and save to the group's workspace.
    * Returns the container-relative path (/workspace/group/uploads/...) or null on failure.
    */
-  private async downloadImage(jid: string, message: any): Promise<string | null> {
+  private async downloadImage(
+    jid: string,
+    message: any,
+  ): Promise<string | null> {
     try {
       const messageId = message.message_id;
       let imageKey = '';
@@ -130,21 +133,21 @@ export class FeishuChannel implements Channel {
         params: { type: 'image' },
       });
 
-      // resp.data is a readable stream or buffer
-      const data = resp?.data;
-      if (!data) return null;
-
-      if (Buffer.isBuffer(data)) {
-        fs.writeFileSync(hostPath, data);
-      } else if (typeof data.pipe === 'function') {
-        // Readable stream
+      // Feishu SDK returns an object with writeFile() and getReadableStream()
+      if (typeof resp?.writeFile === 'function') {
+        await resp.writeFile(hostPath);
+      } else if (resp?.data && Buffer.isBuffer(resp.data)) {
+        fs.writeFileSync(hostPath, resp.data);
+      } else if (typeof resp?.getReadableStream === 'function') {
+        const stream = resp.getReadableStream();
         await new Promise<void>((resolve, reject) => {
           const ws = fs.createWriteStream(hostPath);
-          data.pipe(ws);
+          stream.pipe(ws);
           ws.on('finish', resolve);
           ws.on('error', reject);
         });
       } else {
+        logger.warn({ jid, respKeys: Object.keys(resp || {}) }, 'Feishu: unknown response format for image download');
         return null;
       }
 
