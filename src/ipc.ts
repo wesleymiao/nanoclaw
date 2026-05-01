@@ -81,9 +81,13 @@ export function startIpcWatcher(deps: IpcDeps): void {
   const ipcBaseDir = path.join(DATA_DIR, 'ipc');
   fs.mkdirSync(ipcBaseDir, { recursive: true });
 
+  const IPC_IDLE_INTERVAL = 500;
+  const IPC_ACTIVE_INTERVAL = 5000;
+
   const processIpcFiles = async () => {
     // Scan all group IPC directories (identity determined by directory)
     let groupFolders: string[];
+    let hadMessages = false;
     try {
       groupFolders = fs.readdirSync(ipcBaseDir).filter((f) => {
         const stat = fs.statSync(path.join(ipcBaseDir, f));
@@ -91,7 +95,7 @@ export function startIpcWatcher(deps: IpcDeps): void {
       });
     } catch (err) {
       logger.error({ err }, 'Error reading IPC base directory');
-      setTimeout(processIpcFiles, IPC_POLL_INTERVAL);
+      setTimeout(processIpcFiles, IPC_IDLE_INTERVAL);
       return;
     }
 
@@ -113,7 +117,12 @@ export function startIpcWatcher(deps: IpcDeps): void {
         if (fs.existsSync(messagesDir)) {
           const messageFiles = fs
             .readdirSync(messagesDir)
-            .filter((f) => f.endsWith('.json'));
+            .filter((f) => f.endsWith('.json'))
+            .sort(); // chronological order (filenames start with timestamp)
+
+          // Batch messages per chatJid to reduce outbound API calls
+          const pendingMessages = new Map<string, string[]>();
+
           for (const file of messageFiles) {
             const filePath = path.join(messagesDir, file);
             try {
@@ -125,11 +134,9 @@ export function startIpcWatcher(deps: IpcDeps): void {
                   isMain ||
                   (targetGroup && targetGroup.folder === sourceGroup)
                 ) {
-                  await deps.sendMessage(data.chatJid, data.text);
-                  logger.info(
-                    { chatJid: data.chatJid, sourceGroup },
-                    'IPC message sent',
-                  );
+                  const existing = pendingMessages.get(data.chatJid) || [];
+                  existing.push(data.text);
+                  pendingMessages.set(data.chatJid, existing);
                 } else {
                   logger.warn(
                     { chatJid: data.chatJid, sourceGroup },
@@ -150,6 +157,17 @@ export function startIpcWatcher(deps: IpcDeps): void {
                 path.join(errorDir, `${sourceGroup}-${file}`),
               );
             }
+          }
+
+          // Send batched messages (combine multiple per-chat into one)
+          for (const [chatJid, texts] of pendingMessages) {
+            hadMessages = true;
+            const combined = texts.join('\n');
+            await deps.sendMessage(chatJid, combined);
+            logger.info(
+              { chatJid, sourceGroup, batchSize: texts.length },
+              'IPC message sent',
+            );
           }
         }
       } catch (err) {
@@ -191,7 +209,7 @@ export function startIpcWatcher(deps: IpcDeps): void {
       }
     }
 
-    setTimeout(processIpcFiles, IPC_POLL_INTERVAL);
+    setTimeout(processIpcFiles, hadMessages ? IPC_ACTIVE_INTERVAL : IPC_IDLE_INTERVAL);
   };
 
   processIpcFiles();

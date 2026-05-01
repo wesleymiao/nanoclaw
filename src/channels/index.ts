@@ -11,6 +11,9 @@ import './feishu.js';
 // slack
 import './slack.js';
 
+// wecom
+import './wecom.js';
+
 // telegram
 
 // whatsapp

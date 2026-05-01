@@ -147,13 +147,14 @@ function buildVolumeMounts(
     });
   }
 
-  // Mount Azure CLI credentials (read-only) so agents can use `az` commands
+  // Mount Azure CLI credentials (read-write) so agents can use `az` commands
+  // Read-write allows token refresh inside the container
   const azureDir = path.join(os.homedir(), '.azure');
   if (fs.existsSync(azureDir)) {
     mounts.push({
       hostPath: azureDir,
       containerPath: '/home/node/.azure',
-      readonly: true,
+      readonly: false,
     });
   }
 
@@ -201,6 +202,7 @@ function buildVolumeMounts(
   }
 
   // Sync skills from container/skills/ into each group's .claude/skills/
+  // Only copy skills that don't already exist — agent modifications persist
   const skillsSrc = path.join(process.cwd(), 'container', 'skills');
   const skillsDst = path.join(groupSessionsDir, 'skills');
   if (fs.existsSync(skillsSrc)) {
@@ -208,7 +210,9 @@ function buildVolumeMounts(
       const srcDir = path.join(skillsSrc, skillDir);
       if (!fs.statSync(srcDir).isDirectory()) continue;
       const dstDir = path.join(skillsDst, skillDir);
-      fs.cpSync(srcDir, dstDir, { recursive: true });
+      if (!fs.existsSync(dstDir)) {
+        fs.cpSync(srcDir, dstDir, { recursive: true });
+      }
     }
   }
   mounts.push({

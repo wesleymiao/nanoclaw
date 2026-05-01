@@ -282,7 +282,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   // React to the last user message with OK emoji as acknowledgment
   const lastMsg = missedMessages[missedMessages.length - 1];
   if (lastMsg?.id && channel.reactToMessage) {
-    await channel.reactToMessage(chatJid, lastMsg.id, 'OK');
+    await channel.reactToMessage(chatJid, lastMsg.id, 'Typing');
   } else {
     await channel.setTyping?.(chatJid, true);
   }
@@ -536,7 +536,7 @@ async function startMessageLoop(): Promise<void> {
             const lastPiped = messagesToSend[messagesToSend.length - 1];
             if (lastPiped?.id && channel.reactToMessage) {
               channel
-                .reactToMessage(chatJid, lastPiped.id, 'OK')
+                .reactToMessage(chatJid, lastPiped.id, 'Typing')
                 .catch((err) =>
                   logger.warn(
                     { chatJid, err },

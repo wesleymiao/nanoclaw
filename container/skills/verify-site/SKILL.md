@@ -116,3 +116,109 @@ Cover these areas as applicable:
 - Use `page.waitForSelector('#element', { timeout: 10000 })` instead of fixed waits when possible
 - Take screenshots at key steps — they help debug failures and show the user what happened
 - Always test against the **live public URL**, not localhost
+
+## Backend Log Monitoring During E2E
+
+Playwright catches frontend issues, but server-side errors (missing env vars, DB failures, unhandled exceptions, 500s) are invisible to the browser. **Only check backend logs when E2E tests fail** — don't waste time on logs when everything passes.
+
+### Enable logging
+
+Turn on application and web server logging for the Azure App Service:
+
+```bash
+az webapp log config \
+  --name <app-name> \
+  --resource-group <rg-name> \
+  --application-logging filesystem \
+  --web-server-logging filesystem \
+  --level information
+```
+
+### Tail logs to diagnose failures
+
+When E2E tests fail, tail recent backend logs to find the root cause:
+
+```bash
+# Grab the last 200 lines of backend logs
+az webapp log tail --name <app-name> --resource-group <rg-name> > /tmp/backend-logs.txt 2>&1 &
+LOG_PID=$!
+sleep 5
+
+# Reproduce the failure — re-run the failing test
+BASE_URL="$BASE_URL" node tests/e2e-live.js
+kill $LOG_PID 2>/dev/null
+wait $LOG_PID 2>/dev/null
+
+# Search for errors
+grep -iE 'error|exception|500|unhandled|ECONNREFUSED|FATAL' /tmp/backend-logs.txt | head -20
+```
+
+### Download full logs
+
+For deeper debugging, download the complete log bundle:
+
+```bash
+az webapp log download \
+  --name <app-name> \
+  --resource-group <rg-name> \
+  --log-file /tmp/webapp-logs.zip
+
+unzip -o /tmp/webapp-logs.zip -d /tmp/webapp-logs/
+```
+
+### Combined verification script
+
+Runs E2E first. Only captures and analyzes backend logs if E2E fails:
+
+```bash
+#!/bin/bash
+set -e
+APP_NAME="${1:?Usage: verify.sh <app-name> <resource-group>}"
+RG="${2:?Usage: verify.sh <app-name> <resource-group>}"
+BASE_URL="https://${APP_NAME}.azurewebsites.net"
+
+echo "🔍 Verifying ${BASE_URL}"
+echo "================================"
+
+# 1. Run E2E tests
+echo "🎭 Running Playwright E2E tests..."
+if BASE_URL="$BASE_URL" node tests/e2e-live.js; then
+  echo ""
+  echo "✅ Verification PASSED (all E2E tests passed)"
+  exit 0
+fi
+
+# 2. E2E failed — now check backend logs for root cause
+echo ""
+echo "❌ E2E tests failed — checking backend logs for clues..."
+echo ""
+
+az webapp log config --name "$APP_NAME" --resource-group "$RG" \
+  --application-logging filesystem --web-server-logging filesystem \
+  --level information -o none
+
+az webapp log tail --name "$APP_NAME" --resource-group "$RG" > /tmp/backend-logs.txt 2>&1 &
+LOG_PID=$!
+sleep 5
+
+# Re-run failing tests to capture logs during failure
+BASE_URL="$BASE_URL" node tests/e2e-live.js 2>/dev/null || true
+
+kill $LOG_PID 2>/dev/null
+wait $LOG_PID 2>/dev/null
+
+# 3. Analyze
+echo "=== Backend Log Analysis ==="
+if grep -iE 'error|exception|500|unhandled|FATAL' /tmp/backend-logs.txt | head -20; then
+  echo ""
+  echo "⚠️  Backend errors detected — likely root cause above"
+else
+  echo "No backend errors found — failure is frontend-only"
+fi
+
+echo ""
+echo "❌ Verification FAILED"
+exit 1
+```
+
+Save as `tests/verify.sh`, run with: `bash tests/verify.sh <app-name> <resource-group>`

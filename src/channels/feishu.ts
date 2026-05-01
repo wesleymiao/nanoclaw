@@ -42,6 +42,12 @@ export class FeishuChannel implements Channel {
   private workingMessageId = new Map<string, string>();
   /** Cache user open_id → display name */
   private userNameCache = new Map<string, string>();
+  /** Text batching: Feishu clients split long messages at ~4096 chars.
+   *  Buffer chunks from same sender in same chat and flush after a delay. */
+  private textBatch = new Map<string, {
+    timer: ReturnType<typeof setTimeout>;
+    chunks: Array<{ data: any; content: string }>;
+  }>();
   private opts: FeishuChannelOpts;
   private dispatcher: lark.EventDispatcher;
 
@@ -108,15 +114,35 @@ export class FeishuChannel implements Channel {
     message: any,
   ): Promise<string | null> {
     try {
-      const messageId = message.message_id;
       let imageKey = '';
       try {
         const parsed = JSON.parse(message.content);
         imageKey = parsed.image_key || '';
       } catch {}
       if (!imageKey) return null;
+      return this.downloadImageByKey(jid, message.message_id, imageKey);
+    } catch (err) {
+      logger.warn({ jid, err }, 'Feishu: failed to download image');
+      return null;
+    }
+  }
 
-      // Resolve group folder
+  /**
+   * Download a file from a Feishu message and save to the group's workspace.
+   * Returns the container-relative path or null on failure.
+   */
+  private async downloadFile(jid: string, message: any): Promise<string | null> {
+    try {
+      const messageId = message.message_id;
+      let fileKey = '';
+      let fileName = 'file';
+      try {
+        const parsed = JSON.parse(message.content);
+        fileKey = parsed.file_key || '';
+        fileName = parsed.file_name || 'file';
+      } catch {}
+      if (!fileKey) return null;
+
       const groups = this.opts.registeredGroups();
       const group = groups[jid];
       if (!group) return null;
@@ -124,20 +150,18 @@ export class FeishuChannel implements Channel {
       const uploadsDir = path.join(GROUPS_DIR, group.folder, 'uploads');
       fs.mkdirSync(uploadsDir, { recursive: true });
 
-      const filename = `img-${Date.now()}.png`;
+      // Preserve original filename with timestamp prefix to avoid collisions
+      const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
+      const filename = `${Date.now()}-${safeName}`;
       const hostPath = path.join(uploadsDir, filename);
 
-      // Download via Feishu message resource API
       const resp = await (this.client as any).im.messageResource.get({
-        path: { message_id: messageId, file_key: imageKey },
-        params: { type: 'image' },
+        path: { message_id: messageId, file_key: fileKey },
+        params: { type: 'file' },
       });
 
-      // Feishu SDK returns an object with writeFile() and getReadableStream()
       if (typeof resp?.writeFile === 'function') {
         await resp.writeFile(hostPath);
-      } else if (resp?.data && Buffer.isBuffer(resp.data)) {
-        fs.writeFileSync(hostPath, resp.data);
       } else if (typeof resp?.getReadableStream === 'function') {
         const stream = resp.getReadableStream();
         await new Promise<void>((resolve, reject) => {
@@ -147,15 +171,174 @@ export class FeishuChannel implements Channel {
           ws.on('error', reject);
         });
       } else {
-        logger.warn({ jid, respKeys: Object.keys(resp || {}) }, 'Feishu: unknown response format for image download');
         return null;
       }
 
-      logger.info({ jid, messageId, filename }, 'Feishu image downloaded');
+      logger.info({ jid, messageId, filename }, 'Feishu file downloaded');
       return `/workspace/group/uploads/${filename}`;
     } catch (err) {
-      logger.warn({ jid, err }, 'Feishu: failed to download image');
+      logger.warn({ jid, err }, 'Feishu: failed to download file');
       return null;
+    }
+  }
+
+  /**
+   * Download a media file (video/audio) from a Feishu message.
+   * Returns the container-relative path or null on failure.
+   */
+  private async downloadMedia(jid: string, message: any): Promise<string | null> {
+    try {
+      const messageId = message.message_id;
+      let fileKey = '';
+      let fileName = 'media';
+      try {
+        const parsed = JSON.parse(message.content);
+        fileKey = parsed.file_key || '';
+        fileName = parsed.file_name || parsed.name || 'media';
+      } catch {}
+      if (!fileKey) return null;
+
+      const groups = this.opts.registeredGroups();
+      const group = groups[jid];
+      if (!group) return null;
+
+      const uploadsDir = path.join(GROUPS_DIR, group.folder, 'uploads');
+      fs.mkdirSync(uploadsDir, { recursive: true });
+
+      const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
+      const filename = `${Date.now()}-${safeName}`;
+      const hostPath = path.join(uploadsDir, filename);
+
+      // Try 'file' type first, fallback to 'media' if it fails
+      let resp: any = null;
+      for (const resourceType of ['file', 'media']) {
+        try {
+          resp = await (this.client as any).im.messageResource.get({
+            path: { message_id: messageId, file_key: fileKey },
+            params: { type: resourceType },
+          });
+          if (resp?.writeFile || resp?.getReadableStream) break;
+        } catch {
+          resp = null;
+        }
+      }
+
+      if (typeof resp?.writeFile === 'function') {
+        await resp.writeFile(hostPath);
+      } else if (typeof resp?.getReadableStream === 'function') {
+        const stream = resp.getReadableStream();
+        await new Promise<void>((resolve, reject) => {
+          const ws = fs.createWriteStream(hostPath);
+          stream.pipe(ws);
+          ws.on('finish', resolve);
+          ws.on('error', reject);
+        });
+      } else {
+        return null;
+      }
+
+      logger.info({ jid, messageId, filename }, 'Feishu media downloaded');
+      return `/workspace/group/uploads/${filename}`;
+    } catch (err) {
+      logger.warn({ jid, err }, 'Feishu: failed to download media');
+      return null;
+    }
+  }
+
+  /**
+   * Download an image by message ID and image key, saving to group uploads dir.
+   * Returns the container-relative path or null on failure.
+   */
+  private async downloadImageByKey(
+    jid: string,
+    messageId: string,
+    imageKey: string,
+  ): Promise<string | null> {
+    try {
+      const groups = this.opts.registeredGroups();
+      const group = groups[jid];
+      if (!group) return null;
+
+      const uploadsDir = path.join(GROUPS_DIR, group.folder, 'uploads');
+      fs.mkdirSync(uploadsDir, { recursive: true });
+
+      const filename = `img-${Date.now()}-${Math.random().toString(36).slice(2, 6)}.png`;
+      const hostPath = path.join(uploadsDir, filename);
+
+      const resp = await (this.client as any).im.messageResource.get({
+        path: { message_id: messageId, file_key: imageKey },
+        params: { type: 'image' },
+      });
+
+      if (typeof resp?.writeFile === 'function') {
+        await resp.writeFile(hostPath);
+      } else if (typeof resp?.getReadableStream === 'function') {
+        const stream = resp.getReadableStream();
+        await new Promise<void>((resolve, reject) => {
+          const ws = fs.createWriteStream(hostPath);
+          stream.pipe(ws);
+          ws.on('finish', resolve);
+          ws.on('error', reject);
+        });
+      } else {
+        return null;
+      }
+
+      logger.info({ jid, messageId, imageKey, filename }, 'Feishu image downloaded (post)');
+      return `/workspace/group/uploads/${filename}`;
+    } catch (err) {
+      logger.warn({ jid, imageKey, err }, 'Feishu: failed to download post image');
+      return null;
+    }
+  }
+
+  /**
+   * Parse a Feishu "post" (rich text) message.
+   * Structure: {"title":"...", "content":[[{"tag":"text","text":"hello"},{"tag":"img","image_key":"img_xxx"}]]}
+   * Returns combined text with image paths for the agent.
+   */
+  private async parsePostMessage(jid: string, message: any): Promise<string> {
+    try {
+      const parsed = JSON.parse(message.content);
+      logger.info({ jid, parsedKeys: Object.keys(parsed || {}), rawContent: message.content?.slice(0, 500) }, 'Feishu: parsePostMessage debug');
+      // Post content may be nested under a locale key (zh_cn, en_us) or directly at top level
+      const post = parsed?.zh_cn || parsed?.en_us || parsed?.ja_jp
+        || (parsed?.content ? parsed : null)
+        || Object.values(parsed || {})[0] as any;
+      if (!post) {
+        logger.warn({ jid, parsedKeys: Object.keys(parsed || {}) }, 'Feishu: post has no locale key');
+        return '[post message - could not parse]';
+      }
+      logger.info({ jid, title: post.title, contentLength: post.content?.length, postKeys: Object.keys(post || {}) }, 'Feishu: post structure');
+
+      const title = post.title || '';
+      const contentBlocks: Array<Array<any>> = post.content || [];
+      const parts: string[] = [];
+      if (title) parts.push(title);
+
+      const messageId = message.message_id;
+      for (const line of contentBlocks) {
+        if (!Array.isArray(line)) continue;
+        for (const block of line) {
+          if (block.tag === 'text') {
+            parts.push(block.text || '');
+          } else if (block.tag === 'a') {
+            parts.push(block.text ? `${block.text} (${block.href || ''})` : block.href || '');
+          } else if (block.tag === 'img' && block.image_key) {
+            const imgPath = await this.downloadImageByKey(jid, messageId, block.image_key);
+            if (imgPath) {
+              parts.push(`[Image: ${imgPath}]\nUse the Read tool to view this image.`);
+            }
+          }
+        }
+      }
+
+      const result = parts.join('\n') || '[empty post message]';
+      logger.info({ jid, resultLength: result.length, result: result.slice(0, 200) }, 'Feishu: parsePostMessage result');
+      return result;
+    } catch (err) {
+      logger.warn({ jid, err }, 'Feishu: failed to parse post message');
+      return '[post message - parse error]';
     }
   }
 
@@ -264,6 +447,9 @@ export class FeishuChannel implements Channel {
     // Parse message content — Feishu sends JSON strings
     let content = '';
     const msgType = message.message_type;
+    logger.info({ jid, msgType, contentKeys: Object.keys(message).join(',') }, 'Feishu: incoming message type');
+
+    // Text messages may be split by Feishu client at ~4096 chars — batch them
     if (msgType === 'text') {
       try {
         const parsed = JSON.parse(message.content);
@@ -271,7 +457,39 @@ export class FeishuChannel implements Channel {
       } catch {
         content = message.content || '';
       }
-    } else if (msgType === 'image') {
+      if (!content) return;
+
+      const senderId = data.sender?.sender_id?.open_id || data.sender?.sender_id?.user_id || '';
+      const batchKey = `${jid}:${senderId}`;
+      const existing = this.textBatch.get(batchKey);
+
+      if (existing) {
+        clearTimeout(existing.timer);
+        existing.chunks.push({ data, content });
+      } else {
+        this.textBatch.set(batchKey, {
+          timer: setTimeout(() => {}, 0), // placeholder
+          chunks: [{ data, content }],
+        });
+      }
+
+      const batch = this.textBatch.get(batchKey)!;
+      // If message is near the split threshold, wait longer for continuation
+      const SPLIT_THRESHOLD = 3800;
+      const delay = content.length >= SPLIT_THRESHOLD ? 2000 : 600;
+
+      batch.timer = setTimeout(() => {
+        this.textBatch.delete(batchKey);
+        const combined = batch.chunks.map(c => c.content).join('');
+        const lastChunk = batch.chunks[batch.chunks.length - 1];
+        logger.info({ jid, chunks: batch.chunks.length, totalLength: combined.length }, 'Feishu: text batch flushed');
+        this.emitMessage(jid, lastChunk.data, combined, message.message_id)
+          .catch(err => logger.error({ jid, err }, 'Feishu: emitMessage error'));
+      }, delay);
+      return;
+    }
+
+    if (msgType === 'image') {
       // Download image and save to group workspace for agent to Read
       const imagePath = await this.downloadImage(jid, message);
       if (imagePath) {
@@ -279,12 +497,56 @@ export class FeishuChannel implements Channel {
       } else {
         content = '[image message - failed to download]';
       }
+    } else if (msgType === 'file') {
+      // Download file and save to group workspace
+      const filePath = await this.downloadFile(jid, message);
+      if (filePath) {
+        const ext = path.extname(filePath).toLowerCase();
+        if (ext === '.docx' || ext === '.doc') {
+          content = `[User sent a Word document: ${filePath}]\nUse mammoth to extract text: npx mammoth ${filePath} --output-format=markdown\nOr read it with: npx mammoth ${filePath} /dev/stdout 2>/dev/null`;
+        } else if (ext === '.xlsx' || ext === '.xls' || ext === '.csv') {
+          content = `[User sent a spreadsheet: ${filePath}]\nUse the xlsx package to read it:\nnode -e "const XLSX = require('xlsx'); const wb = XLSX.readFile('${filePath}'); wb.SheetNames.forEach(n => { console.log('=== ' + n + ' ==='); console.log(XLSX.utils.sheet_to_csv(wb.Sheets[n])); });"`;
+        } else if (ext === '.pdf') {
+          content = `[User sent a PDF: ${filePath}]\nUse the Read tool to view this PDF.`;
+        } else {
+          content = `[User sent a file: ${filePath}]`;
+        }
+      } else {
+        content = '[file message - failed to download]';
+      }
+    } else if (msgType === 'post') {
+      // Rich text: extract text and images from post content
+      content = await this.parsePostMessage(jid, message);
+    } else if (msgType === 'media' || msgType === 'audio') {
+      // Video/audio — download via file API
+      const filePath = await this.downloadMedia(jid, message);
+      if (filePath) {
+        const ext = path.extname(filePath).toLowerCase();
+        if (['.mp4', '.mov', '.avi', '.mkv', '.webm'].includes(ext)) {
+          content = `[User sent a video: ${filePath}]\nUse ffmpeg to process it. Examples:\n- Extract audio: ffmpeg -i ${filePath} -vn /tmp/audio.mp3\n- Remove audio: ffmpeg -i ${filePath} -an -c:v copy /tmp/silent.mp4\n- Get info: ffprobe ${filePath}`;
+        } else {
+          content = `[User sent an audio file: ${filePath}]\nUse ffmpeg to process it. Example: ffprobe ${filePath}`;
+        }
+      } else {
+        content = `[${msgType} message - failed to download]`;
+      }
     } else {
       // For non-text messages, note the type
       content = `[${msgType} message]`;
     }
 
     if (!content) return;
+
+    this.emitMessage(jid, data, content, message.message_id);
+  }
+
+  /** Emit a parsed message to the pipeline (sender resolution + trigger translation) */
+  private async emitMessage(jid: string, data: any, content: string, messageId: string): Promise<void> {
+    const message = data?.message;
+    const rawTime = parseInt(message?.create_time, 10);
+    const timestamp = new Date(
+      rawTime > 1e12 ? rawTime : rawTime * 1000,
+    ).toISOString();
 
     // Get sender info
     const sender = data.sender;

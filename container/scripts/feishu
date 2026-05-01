@@ -130,12 +130,14 @@ print(json.dumps({
       *)
         # Upload as file
         FILETYPE="stream"
+        MSGTYPE="file"
         case "$EXT" in
           pdf) FILETYPE="pdf" ;;
           doc|docx) FILETYPE="doc" ;;
           xls|xlsx) FILETYPE="xls" ;;
           ppt|pptx) FILETYPE="ppt" ;;
-          mp4|mp3) FILETYPE="mp4" ;;
+          mp4|mov) FILETYPE="mp4"; MSGTYPE="media" ;;
+          mp3|ogg|opus|wav) FILETYPE="opus"; MSGTYPE="media" ;;
         esac
         RESP=$(curl -s -X POST "https://open.feishu.cn/open-apis/im/v1/files" \
           -H "Authorization: Bearer $TOKEN" \
@@ -144,12 +146,45 @@ print(json.dumps({
           -F "file=@$FILE")
         check_ok "$RESP" "upload file" || exit 1
         FILE_KEY=$(echo "$RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('data',{}).get('file_key',''))")
-        # Send file message
-        PAYLOAD="{\"receive_id\":\"$CHAT_ID\",\"msg_type\":\"file\",\"content\":\"{\\\"file_key\\\":\\\"$FILE_KEY\\\"}\"}"
+
+        if [ "$MSGTYPE" = "media" ] && [ "$FILETYPE" = "mp4" ]; then
+          # Video needs a cover image (image_key). Extract first frame with ffmpeg.
+          COVER="/tmp/feishu_cover_$$.png"
+          FFMPEG_BIN=""
+          if command -v ffmpeg &>/dev/null; then
+            FFMPEG_BIN="ffmpeg"
+          elif [ -f "$(node -e "try{console.log(require('ffmpeg-static'))}catch{}" 2>/dev/null)" ]; then
+            FFMPEG_BIN="$(node -e "console.log(require('ffmpeg-static'))")"
+          fi
+
+          IMAGE_KEY=""
+          if [ -n "$FFMPEG_BIN" ]; then
+            "$FFMPEG_BIN" -y -i "$FILE" -frames:v 1 -q:v 2 "$COVER" 2>/dev/null
+            if [ -f "$COVER" ]; then
+              RESP2=$(curl -s -X POST "https://open.feishu.cn/open-apis/im/v1/images" \
+                -H "Authorization: Bearer $TOKEN" \
+                -F "image_type=message" \
+                -F "image=@$COVER")
+              IMAGE_KEY=$(echo "$RESP2" | python3 -c "import sys,json; print(json.load(sys.stdin).get('data',{}).get('image_key',''))" 2>/dev/null || echo "")
+              rm -f "$COVER"
+            fi
+          fi
+
+          if [ -n "$IMAGE_KEY" ]; then
+            PAYLOAD="{\"receive_id\":\"$CHAT_ID\",\"msg_type\":\"media\",\"content\":\"{\\\"file_key\\\":\\\"$FILE_KEY\\\",\\\"image_key\\\":\\\"$IMAGE_KEY\\\"}\"}"
+          else
+            # Fallback: send as file if cover extraction fails
+            PAYLOAD="{\"receive_id\":\"$CHAT_ID\",\"msg_type\":\"file\",\"content\":\"{\\\"file_key\\\":\\\"$FILE_KEY\\\"}\"}"
+            MSGTYPE="file"
+          fi
+        else
+          PAYLOAD="{\"receive_id\":\"$CHAT_ID\",\"msg_type\":\"$MSGTYPE\",\"content\":\"{\\\"file_key\\\":\\\"$FILE_KEY\\\"}\"}"
+        fi
+
         RESP=$(api POST "/im/v1/messages?receive_id_type=chat_id" \
           -H "Content-Type: application/json" -d "$PAYLOAD")
-        check_ok "$RESP" "send file" || exit 1
-        echo "Uploaded file: $TITLE"
+        check_ok "$RESP" "send $MSGTYPE" || exit 1
+        echo "Uploaded $MSGTYPE: $TITLE"
         ;;
     esac
     ;;
@@ -207,7 +242,11 @@ Messaging:
   feishu delete <message_id>           Delete a message
 
 Files:
-  feishu upload <file> [title]         Upload image/file to the chat
+  feishu upload <file> [title]         Upload image/file/video/audio to chat
+                                       Images: png, jpg, gif, webp, bmp
+                                       Video: mp4, mov (≤30MB, sent inline)
+                                       Audio: mp3, ogg, opus, wav
+                                       Docs: pdf, doc/docx, xls/xlsx, ppt/pptx
 
 Reactions:
   feishu react <message_id> <emoji>    Add emoji reaction

@@ -1,0 +1,201 @@
+#!/bin/bash
+# WeCom CLI for NanoClaw container agents.
+# Usage: wecom <command> [args...]
+#
+# Requires WECOM_CORP_ID, WECOM_CORP_SECRET, and WECOM_AGENT_ID env vars.
+
+set -euo pipefail
+
+CORP_ID="${WECOM_CORP_ID:-}"
+CORP_SECRET="${WECOM_CORP_SECRET:-}"
+AGENT_ID="${WECOM_AGENT_ID:-}"
+
+if [ -z "$CORP_ID" ] || [ -z "$CORP_SECRET" ]; then
+  echo "Error: WECOM_CORP_ID and WECOM_CORP_SECRET not set (not a WeCom channel?)" >&2
+  exit 1
+fi
+
+# Get access token
+TOKEN_CACHE="/tmp/.wecom_token"
+get_token() {
+  # Check cache
+  if [ -f "$TOKEN_CACHE" ]; then
+    local cached_at cached_token
+    cached_at=$(head -1 "$TOKEN_CACHE")
+    cached_token=$(tail -1 "$TOKEN_CACHE")
+    local now=$(date +%s)
+    local age=$((now - cached_at))
+    if [ $age -lt 7000 ] && [ -n "$cached_token" ]; then
+      echo "$cached_token"
+      return
+    fi
+  fi
+
+  local resp
+  resp=$(curl -s "https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid=$CORP_ID&corpsecret=$CORP_SECRET")
+  local token
+  token=$(echo "$resp" | python3 -c "import sys,json; print(json.load(sys.stdin).get('access_token',''))")
+  if [ -z "$token" ]; then
+    echo "Error: Failed to get WeCom access token" >&2
+    local msg
+    msg=$(echo "$resp" | python3 -c "import sys,json; print(json.load(sys.stdin).get('errmsg','unknown'))" 2>/dev/null || echo "$resp")
+    echo "  $msg" >&2
+    exit 1
+  fi
+  echo "$(date +%s)" > "$TOKEN_CACHE"
+  echo "$token" >> "$TOKEN_CACHE"
+  echo "$token"
+}
+
+TOKEN=""
+ensure_token() {
+  if [ -z "$TOKEN" ]; then
+    TOKEN=$(get_token)
+  fi
+}
+
+api() {
+  local method="$1" endpoint="$2"; shift 2
+  ensure_token
+  curl -s -X "$method" "https://qyapi.weixin.qq.com/cgi-bin${endpoint}?access_token=$TOKEN" "$@"
+}
+
+check_ok() {
+  local resp="$1" action="$2"
+  local code
+  code=$(echo "$resp" | python3 -c "import sys,json; print(json.load(sys.stdin).get('errcode',1))" 2>/dev/null || echo "1")
+  if [ "$code" != "0" ]; then
+    local msg
+    msg=$(echo "$resp" | python3 -c "import sys,json; print(json.load(sys.stdin).get('errmsg','unknown error'))" 2>/dev/null || echo "$resp")
+    echo "Error: $action failed: $msg" >&2
+    return 1
+  fi
+}
+
+CMD="${1:-help}"; shift || true
+
+case "$CMD" in
+
+  ## --- Messaging ---
+
+  send)
+    # Send a text message. Usage: wecom send "text" [userid]
+    TEXT="$1"
+    TOUSER="${2:-@all}"
+    CONTENT=$(printf '%s' "$TEXT" | python3 -c "import sys,json; print(json.dumps({'content': sys.stdin.read()}))")
+    PAYLOAD=$(python3 -c "
+import json, sys
+print(json.dumps({
+    'touser': '$TOUSER',
+    'msgtype': 'text',
+    'agentid': int('$AGENT_ID'),
+    'text': json.loads('''$CONTENT''')
+}))
+" 2>/dev/null || echo "")
+
+    # Safer approach using stdin
+    PAYLOAD=$(printf '%s' "$TEXT" | python3 -c "
+import sys, json
+text = sys.stdin.read()
+print(json.dumps({
+    'touser': '$TOUSER',
+    'msgtype': 'text',
+    'agentid': int('$AGENT_ID'),
+    'text': {'content': text}
+}))
+")
+    RESP=$(api POST "/message/send" -H "Content-Type: application/json" -d "$PAYLOAD")
+    check_ok "$RESP" "send" || exit 1
+    echo "Sent"
+    ;;
+
+  send-markdown)
+    # Send a markdown message. Usage: wecom send-markdown "markdown text" [userid]
+    TEXT="$1"
+    TOUSER="${2:-@all}"
+    PAYLOAD=$(printf '%s' "$TEXT" | python3 -c "
+import sys, json
+text = sys.stdin.read()
+print(json.dumps({
+    'touser': '$TOUSER',
+    'msgtype': 'markdown',
+    'agentid': int('$AGENT_ID'),
+    'markdown': {'content': text}
+}))
+")
+    RESP=$(api POST "/message/send" -H "Content-Type: application/json" -d "$PAYLOAD")
+    check_ok "$RESP" "send-markdown" || exit 1
+    echo "Sent (markdown)"
+    ;;
+
+  ## --- Files ---
+
+  upload)
+    # Upload a file or image. Usage: wecom upload <file-path> [type]
+    FILE="$1"
+    if [ ! -f "$FILE" ]; then
+      echo "Error: File not found: $FILE" >&2; exit 1
+    fi
+    ensure_token
+
+    EXT=$(echo "${FILE##*.}" | tr '[:upper:]' '[:lower:]')
+    case "$EXT" in
+      png|jpg|jpeg|gif|bmp|webp) MEDIA_TYPE="image" ;;
+      mp3|amr|wav) MEDIA_TYPE="voice" ;;
+      mp4) MEDIA_TYPE="video" ;;
+      *) MEDIA_TYPE="file" ;;
+    esac
+    MEDIA_TYPE="${2:-$MEDIA_TYPE}"
+
+    # Upload media
+    RESP=$(curl -s -X POST \
+      "https://qyapi.weixin.qq.com/cgi-bin/media/upload?access_token=$TOKEN&type=$MEDIA_TYPE" \
+      -F "media=@$FILE")
+    check_ok "$RESP" "upload" || exit 1
+
+    MEDIA_ID=$(echo "$RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('media_id',''))")
+    if [ -z "$MEDIA_ID" ]; then
+      echo "Error: No media_id in response" >&2; exit 1
+    fi
+
+    # Send media message
+    PAYLOAD=$(python3 -c "
+import json
+print(json.dumps({
+    'touser': '@all',
+    'msgtype': '$MEDIA_TYPE',
+    'agentid': int('$AGENT_ID'),
+    '$MEDIA_TYPE': {'media_id': '$MEDIA_ID'}
+}))
+")
+    RESP=$(api POST "/message/send" -H "Content-Type: application/json" -d "$PAYLOAD")
+    check_ok "$RESP" "send $MEDIA_TYPE" || exit 1
+    echo "Uploaded $MEDIA_TYPE: $(basename "$FILE")"
+    ;;
+
+  ## --- Help ---
+
+  help|--help|-h)
+    cat <<'HELP'
+WeCom CLI for NanoClaw agents
+
+Messaging:
+  wecom send "text" [userid]             Send a text message (@all if no userid)
+  wecom send-markdown "text" [userid]    Send a markdown message
+
+Files:
+  wecom upload <file> [type]             Upload and send file/image
+                                         Types: image, voice, video, file (auto-detected)
+
+Environment:
+  WECOM_CORP_ID                          Enterprise ID (injected by NanoClaw)
+  WECOM_CORP_SECRET                      App Secret (injected by NanoClaw)
+  WECOM_AGENT_ID                         App Agent ID (injected by NanoClaw)
+HELP
+    ;;
+
+  *)
+    echo "Unknown command: $CMD (run 'wecom help' for usage)" >&2
+    exit 1
+    ;;
+esac

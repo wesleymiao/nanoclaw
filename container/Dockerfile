@@ -23,6 +23,7 @@ RUN apt-get update && apt-get install -y \
     libdrm2 \
     libxshmfence1 \
     curl \
+    ffmpeg \
     git \
     gpg \
     lsb-release \
@@ -39,8 +40,8 @@ RUN curl -sL https://aka.ms/InstallAzureCLIDeb | bash && rm -rf /var/lib/apt/lis
 # Set Chromium path for Playwright
 ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
 
-# Install claude-code globally
-RUN npm install -g @anthropic-ai/claude-code
+# Install claude-code, mammoth (Word docs), and xlsx (Excel) globally
+RUN npm install -g @anthropic-ai/claude-code mammoth xlsx
 
 # Pre-install Playwright Chromium so agents don't need to install on the fly
 RUN npx playwright install chromium
