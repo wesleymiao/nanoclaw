@@ -361,6 +361,16 @@ async function buildContainerArgs(
     args.push('-e', `FEISHU_CHAT_ID=${feishuChatId}`);
   }
 
+  // Mount host Claude Code binary for the Agent SDK
+  const claudeBinary = '/usr/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe';
+  if (fs.existsSync(claudeBinary)) {
+    mounts.push({
+      hostPath: claudeBinary,
+      containerPath: '/opt/claude/claude',
+      readonly: true,
+    });
+  }
+
   // Runtime-specific args for host gateway resolution
   args.push(...hostGatewayArgs());
 
@@ -544,9 +554,15 @@ export async function runContainerAgent(
       // If so, the agent is working on a long-running task — not idle.
       try {
         const { execFileSync } = await import('child_process');
-        const top = execFileSync('docker', ['top', containerName, '-o', 'pid'], {
-          timeout: 5000,
-        }).toString().trim();
+        const top = execFileSync(
+          'docker',
+          ['top', containerName, '-o', 'pid'],
+          {
+            timeout: 5000,
+          },
+        )
+          .toString()
+          .trim();
         // docker top returns header + one line per process. >2 lines = child processes active.
         const processCount = top.split('\n').length - 1; // subtract header
         if (processCount > 1) {

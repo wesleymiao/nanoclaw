@@ -39,6 +39,53 @@ const server = new McpServer({
   version: '1.0.0',
 });
 
+// --- Web Search via DuckDuckGo HTML (no API key needed) ---
+
+server.tool(
+  'web_search',
+  'Search the web using DuckDuckGo. Returns titles, URLs, and descriptions. Use this instead of WebSearch (which does not work in this environment).',
+  {
+    query: z.string().describe('The search query'),
+    count: z.number().optional().default(5).describe('Number of results to return (max 10)'),
+  },
+  async (args) => {
+    try {
+      const params = new URLSearchParams({ q: args.query });
+      const resp = await fetch(`https://html.duckduckgo.com/html/?${params}`, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        },
+      });
+      if (!resp.ok) {
+        return { content: [{ type: 'text' as const, text: `Search error: HTTP ${resp.status}` }] };
+      }
+      const html = await resp.text();
+      // Parse results from DuckDuckGo HTML
+      const results: { title: string; url: string; snippet: string }[] = [];
+      const resultRegex = /<a[^>]+class="result__a"[^>]*href="([^"]*)"[^>]*>(.*?)<\/a>[\s\S]*?<a[^>]+class="result__snippet"[^>]*>(.*?)<\/a>/g;
+      let match: RegExpExecArray | null;
+      const max = Math.min(args.count || 5, 10);
+      while ((match = resultRegex.exec(html)) !== null && results.length < max) {
+        const url = decodeURIComponent(match[1].replace(/.*uddg=/, '').replace(/&.*/, ''));
+        const title = match[2].replace(/<[^>]+>/g, '').trim();
+        const snippet = match[3].replace(/<[^>]+>/g, '').trim();
+        if (title && url) {
+          results.push({ title, url, snippet });
+        }
+      }
+      if (results.length === 0) {
+        return { content: [{ type: 'text' as const, text: 'No results found.' }] };
+      }
+      const formatted = results
+        .map((r, i) => `${i + 1}. **${r.title}**\n   ${r.url}\n   ${r.snippet}`)
+        .join('\n\n');
+      return { content: [{ type: 'text' as const, text: formatted }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text' as const, text: `Search error: ${err.message}` }] };
+    }
+  },
+);
+
 server.tool(
   'send_message',
   "Send a message to the user or group immediately while you're still running. Use this for progress updates or to send multiple messages. You can call this multiple times.",
