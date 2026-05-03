@@ -303,6 +303,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
       logger.info({ group: group.name }, `Agent output: ${raw.length} chars`);
       if (text) {
+        logger.info({ group: group.name, textSnippet: text.slice(0, 100), hasMarkdownChars: /\*\*|__|`/.test(text) }, 'Sending agent output to channel');
         await channel.sendMessage(chatJid, text);
         outputSentToUser = true;
       }
@@ -720,6 +721,9 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  // Track last message_id sent per chat (for reminder re-check scheduling)
+  const lastMessageIds = new Map<string, string>();
+
   // Start subsystems (independently of connection handler)
   startSchedulerLoop({
     registeredGroups: () => registeredGroups,
@@ -734,14 +738,21 @@ async function main(): Promise<void> {
         return;
       }
       const text = formatOutbound(rawText);
-      if (text) await channel.sendMessage(jid, text);
+      if (text) {
+        const msgId = await channel.sendMessage(jid, text);
+        if (msgId) lastMessageIds.set(jid, msgId);
+        return msgId;
+      }
     },
+    getLastMessageId: (jid) => lastMessageIds.get(jid),
   });
   startIpcWatcher({
-    sendMessage: (jid, text) => {
+    sendMessage: async (jid, text) => {
       const channel = findChannel(channels, jid);
       if (!channel) throw new Error(`No channel for JID: ${jid}`);
-      return channel.sendMessage(jid, text);
+      const msgId = await channel.sendMessage(jid, text);
+      if (msgId) lastMessageIds.set(jid, msgId);
+      return msgId;
     },
     registeredGroups: () => registeredGroups,
     registerGroup,

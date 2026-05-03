@@ -11,7 +11,7 @@ import { logger } from './logger.js';
 import { RegisteredGroup } from './types.js';
 
 export interface IpcDeps {
-  sendMessage: (jid: string, text: string) => Promise<void>;
+  sendMessage: (jid: string, text: string) => Promise<string | undefined>;
   registeredGroups: () => Record<string, RegisteredGroup>;
   registerGroup: (jid: string, group: RegisteredGroup) => void;
   syncGroups: (force: boolean) => Promise<void>;
@@ -159,13 +159,26 @@ export function startIpcWatcher(deps: IpcDeps): void {
             }
           }
 
-          // Send batched messages (combine multiple per-chat into one)
+          // Send messages — keep verbose (▎-prefixed) separate from content
           for (const [chatJid, texts] of pendingMessages) {
             hadMessages = true;
-            const combined = texts.join('\n');
-            await deps.sendMessage(chatJid, combined);
+            // Split into verbose and content groups, preserving order
+            const groups: { isVerbose: boolean; texts: string[] }[] = [];
+            for (const t of texts) {
+              const isVerbose = t.startsWith('▎');
+              const last = groups[groups.length - 1];
+              if (last && last.isVerbose === isVerbose) {
+                last.texts.push(t);
+              } else {
+                groups.push({ isVerbose, texts: [t] });
+              }
+            }
+            for (const g of groups) {
+              const combined = g.texts.join('\n');
+              await deps.sendMessage(chatJid, combined);
+            }
             logger.info(
-              { chatJid, sourceGroup, batchSize: texts.length },
+              { chatJid, sourceGroup, batchSize: texts.length, groups: groups.length },
               'IPC message sent',
             );
           }
@@ -209,7 +222,10 @@ export function startIpcWatcher(deps: IpcDeps): void {
       }
     }
 
-    setTimeout(processIpcFiles, hadMessages ? IPC_ACTIVE_INTERVAL : IPC_IDLE_INTERVAL);
+    setTimeout(
+      processIpcFiles,
+      hadMessages ? IPC_ACTIVE_INTERVAL : IPC_IDLE_INTERVAL,
+    );
   };
 
   processIpcFiles();
@@ -225,6 +241,7 @@ export async function processTaskIpc(
     schedule_value?: string;
     context_mode?: string;
     script?: string;
+    is_reminder?: boolean;
     groupFolder?: string;
     chatJid?: string;
     targetJid?: string;
@@ -324,6 +341,7 @@ export async function processTaskIpc(
           chat_jid: targetJid,
           prompt: data.prompt,
           script: data.script || null,
+          is_reminder: data.is_reminder === true,
           schedule_type: scheduleType,
           schedule_value: data.schedule_value,
           context_mode: contextMode,
@@ -332,7 +350,7 @@ export async function processTaskIpc(
           created_at: new Date().toISOString(),
         });
         logger.info(
-          { taskId, sourceGroup, targetFolder, contextMode },
+          { taskId, sourceGroup, targetFolder, contextMode, promptPrefix: data.prompt?.slice(0, 50) },
           'Task created via IPC',
         );
         deps.onTasksChanged();

@@ -26,7 +26,11 @@ RUN apt-get update && apt-get install -y \
     ffmpeg \
     git \
     gpg \
+    libheif-examples \
     lsb-release \
+    python3 \
+    python3-pip \
+    && pip install --break-system-packages pillow pillow-heif \
     && rm -rf /var/lib/apt/lists/*
 
 # Install GitHub CLI
@@ -37,14 +41,24 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | g
 # Install Azure CLI
 RUN curl -sL https://aka.ms/InstallAzureCLIDeb | bash && rm -rf /var/lib/apt/lists/*
 
-# Set Chromium path for Playwright
-ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
+# Set Chromium path for Playwright — use bundled Playwright browser, not system chromium
+# System chromium (apt) version may be too new/incompatible with Playwright
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers
 
-# Install claude-code, mammoth (Word docs), and xlsx (Excel) globally
-RUN npm install -g @anthropic-ai/claude-code mammoth xlsx
+# Install claude-code, mammoth (Word docs), xlsx (Excel), and playwright globally
+RUN npm install -g @anthropic-ai/claude-code mammoth xlsx playwright
 
-# Pre-install Playwright Chromium so agents don't need to install on the fly
-RUN npx playwright install chromium
+# Make global node_modules resolvable from any directory (needed for require('playwright'))
+ENV NODE_PATH=/usr/local/lib/node_modules
+
+# Pre-install Playwright browsers and make cache accessible to all users
+# The container runs as 'node' user, so the cache must be readable
+RUN npx playwright install chromium && chmod -R a+rx /opt/playwright-browsers
+
+# Fix crashpad handler crash in container env — replace with no-op
+# The bundled chromium's crashpad handler fails in Docker (no crash reporting needed)
+RUN printf '#!/bin/bash\nexit 0\n' > /opt/playwright-browsers/chromium-1217/chrome-linux64/chrome_crashpad_handler \
+    && chmod +x /opt/playwright-browsers/chromium-1217/chrome-linux64/chrome_crashpad_handler
 
 # Create app directory
 WORKDIR /app

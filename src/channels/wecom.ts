@@ -49,7 +49,12 @@ export class WeComChannel implements Channel {
     string,
     {
       timer: ReturnType<typeof setTimeout>;
-      chunks: Array<{ fromUser: string; content: string; msgId: string; createTime: number }>;
+      chunks: Array<{
+        fromUser: string;
+        content: string;
+        msgId: string;
+        createTime: number;
+      }>;
     }
   >();
   private opts: WeComChannelOpts;
@@ -129,7 +134,11 @@ export class WeComChannel implements Channel {
   private decrypt(encrypted: string): { message: string; receiveid: string } {
     const buf = Buffer.from(encrypted, 'base64');
     const iv = this.encodingAesKey.subarray(0, 16);
-    const decipher = crypto.createDecipheriv('aes-256-cbc', this.encodingAesKey, iv);
+    const decipher = crypto.createDecipheriv(
+      'aes-256-cbc',
+      this.encodingAesKey,
+      iv,
+    );
     decipher.setAutoPadding(false);
     const decrypted = Buffer.concat([decipher.update(buf), decipher.final()]);
 
@@ -161,7 +170,11 @@ export class WeComChannel implements Channel {
     const padded = Buffer.concat([plaintext, padding]);
 
     const iv = this.encodingAesKey.subarray(0, 16);
-    const cipher = crypto.createCipheriv('aes-256-cbc', this.encodingAesKey, iv);
+    const cipher = crypto.createCipheriv(
+      'aes-256-cbc',
+      this.encodingAesKey,
+      iv,
+    );
     cipher.setAutoPadding(false);
     const encrypted = Buffer.concat([cipher.update(padded), cipher.final()]);
     return encrypted.toString('base64');
@@ -401,7 +414,12 @@ export class WeComChannel implements Channel {
     if (msgType === 'image') {
       const picUrl = msg.PicUrl || '';
       const mediaId = msg.MediaId || '';
-      const imagePath = await this.downloadMedia(jid, mediaId, 'image', 'image.png');
+      const imagePath = await this.downloadMedia(
+        jid,
+        mediaId,
+        'image',
+        'image.png',
+      );
       if (imagePath) {
         content = `[User sent an image: ${imagePath}]\nUse the Read tool to view this image.`;
       } else if (picUrl) {
@@ -411,7 +429,12 @@ export class WeComChannel implements Channel {
       }
     } else if (msgType === 'voice') {
       const mediaId = msg.MediaId || '';
-      const filePath = await this.downloadMedia(jid, mediaId, 'voice', 'voice.amr');
+      const filePath = await this.downloadMedia(
+        jid,
+        mediaId,
+        'voice',
+        'voice.amr',
+      );
       if (filePath) {
         content = `[User sent a voice message: ${filePath}]\nUse ffmpeg to convert: ffmpeg -i ${filePath} /tmp/voice.mp3`;
       } else {
@@ -419,7 +442,12 @@ export class WeComChannel implements Channel {
       }
     } else if (msgType === 'video') {
       const mediaId = msg.MediaId || '';
-      const filePath = await this.downloadMedia(jid, mediaId, 'video', 'video.mp4');
+      const filePath = await this.downloadMedia(
+        jid,
+        mediaId,
+        'video',
+        'video.mp4',
+      );
       if (filePath) {
         content = `[User sent a video: ${filePath}]\nUse ffmpeg to process: ffprobe ${filePath}`;
       } else {
@@ -535,7 +563,7 @@ export class WeComChannel implements Channel {
 
   // ── Outbound Messages ─────────────────────────────────────────
 
-  async sendMessage(jid: string, text: string): Promise<void> {
+  async sendMessage(jid: string, text: string): Promise<string | undefined> {
     if (!this.connected) {
       this.outgoingQueue.push({ jid, text });
       logger.info(
@@ -622,7 +650,9 @@ export class WeComChannel implements Channel {
   private async uploadAndSendFile(filePath: string): Promise<void> {
     const token = await this.getAccessToken();
     const ext = path.extname(filePath).toLowerCase();
-    const isImage = ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp'].includes(ext);
+    const isImage = ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp'].includes(
+      ext,
+    );
     const mediaType = isImage ? 'image' : 'file';
 
     // Upload media

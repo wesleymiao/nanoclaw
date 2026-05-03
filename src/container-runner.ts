@@ -168,6 +168,16 @@ function buildVolumeMounts(
     });
   }
 
+  // Mount BaiduPCS-Go credentials (read-write for token refresh)
+  const baiduDir = path.join(os.homedir(), '.config', 'BaiduPCS-Go');
+  if (fs.existsSync(baiduDir)) {
+    mounts.push({
+      hostPath: baiduDir,
+      containerPath: '/home/node/.config/BaiduPCS-Go',
+      readonly: false,
+    });
+  }
+
   // Per-group Claude sessions directory (isolated from other groups)
   // Each group gets their own .claude/ to prevent cross-group session access
   const groupSessionsDir = path.join(
@@ -529,7 +539,28 @@ export async function runContainerAgent(
     // graceful _close sentinel has time to trigger before the hard kill fires.
     const timeoutMs = Math.max(configTimeout, IDLE_TIMEOUT + 30_000);
 
-    const killOnTimeout = () => {
+    const killOnTimeout = async () => {
+      // Before killing, check if the container has active child processes.
+      // If so, the agent is working on a long-running task — not idle.
+      try {
+        const { execFileSync } = await import('child_process');
+        const top = execFileSync('docker', ['top', containerName, '-o', 'pid'], {
+          timeout: 5000,
+        }).toString().trim();
+        // docker top returns header + one line per process. >2 lines = child processes active.
+        const processCount = top.split('\n').length - 1; // subtract header
+        if (processCount > 1) {
+          logger.info(
+            { group: group.name, containerName, processCount },
+            'Container has active child processes, extending timeout',
+          );
+          resetTimeout();
+          return;
+        }
+      } catch {
+        // docker top failed (container may have already exited) — proceed with kill
+      }
+
       timedOut = true;
       logger.error(
         { group: group.name, containerName },

@@ -81,6 +81,18 @@ print(json.dumps({
     echo "Sent (message_id=$MSG_ID)"
     ;;
 
+  send-tracked)
+    # Send a text message and output only the message_id (for scripting).
+    # Usage: MSG_ID=$(feishu send-tracked "text")
+    TEXT="$1"
+    CONTENT=$(printf '%s' "$TEXT" | python3 -c "import sys,json; print(json.dumps({'text': sys.stdin.read()}))")
+    PAYLOAD="{\"receive_id\":\"$CHAT_ID\",\"msg_type\":\"text\",\"content\":$(printf '%s' "$CONTENT" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')}"
+    RESP=$(api POST "/im/v1/messages?receive_id_type=chat_id" \
+      -H "Content-Type: application/json" -d "$PAYLOAD")
+    check_ok "$RESP" "send-tracked" || exit 1
+    echo "$RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('data',{}).get('message_id',''))"
+    ;;
+
   reply)
     # Reply to a message. Usage: feishu reply <message_id> "text"
     MSG_ID="$1"; TEXT="$2"
@@ -201,6 +213,50 @@ print(json.dumps({
     echo "Reacted :$EMOJI:"
     ;;
 
+  reactions)
+    # List or check reactions on a message.
+    # Usage: feishu reactions <message_id>              # list all
+    #        feishu reactions <message_id> --has DONE   # exit 0 if found, 1 if not
+    MSG_ID="$1"; shift
+    HAS_EMOJI=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --has) HAS_EMOJI="$2"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    RESP=$(api GET "/im/v1/messages/$MSG_ID/reactions")
+    check_ok "$RESP" "reactions" || exit 1
+    if [ -n "$HAS_EMOJI" ]; then
+      echo "$RESP" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+items = data.get('data', {}).get('items', [])
+target = '$HAS_EMOJI'
+for item in items:
+    emoji = item.get('reaction_type', {}).get('emoji_type', '')
+    if emoji == target:
+        print(f'Found :{target}:')
+        sys.exit(0)
+print(f'No :{target}: reaction found')
+sys.exit(1)
+"
+    else
+      echo "$RESP" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+items = data.get('data', {}).get('items', [])
+if not items:
+    print('No reactions')
+else:
+    for item in items:
+        emoji = item.get('reaction_type', {}).get('emoji_type', '?')
+        user = item.get('operator', {}).get('operator_id', '?')
+        print(f':{emoji}: by {user}')
+"
+    fi
+    ;;
+
   ## --- History ---
 
   history)
@@ -238,6 +294,7 @@ Feishu CLI for NanoClaw agents
 
 Messaging:
   feishu send "text"                   Send a message
+  feishu send-tracked "text"           Send and output only message_id (for scripts)
   feishu reply <message_id> "text"     Reply to a message
   feishu delete <message_id>           Delete a message
 
@@ -250,6 +307,8 @@ Files:
 
 Reactions:
   feishu react <message_id> <emoji>    Add emoji reaction
+  feishu reactions <msg_id>            List reactions on a message
+  feishu reactions <msg_id> --has DONE Check if DONE reaction exists (exit 0/1)
 
 History:
   feishu history [--limit N]           Read recent messages

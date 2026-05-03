@@ -209,7 +209,7 @@ export class SlackChannel implements Channel {
     return { cleanText, filePaths };
   }
 
-  async sendMessage(jid: string, text: string): Promise<void> {
+  async sendMessage(jid: string, text: string): Promise<string | undefined> {
     const channelId = jid.replace(/^slack:/, '');
 
     if (!this.connected) {

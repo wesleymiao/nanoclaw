@@ -22,7 +22,10 @@ vi.mock('../env.js', () => ({
       WECOM_CORP_SECRET: 'test_corp_secret',
       WECOM_AGENT_ID: '1000001',
       WECOM_TOKEN: 'test_token',
-      WECOM_ENCODING_AES_KEY: crypto.randomBytes(32).toString('base64').slice(0, 43),
+      WECOM_ENCODING_AES_KEY: crypto
+        .randomBytes(32)
+        .toString('base64')
+        .slice(0, 43),
       WECOM_CALLBACK_PORT: '0', // random port for tests
     };
     return Object.fromEntries(keys.map((k) => [k, env[k] || '']));

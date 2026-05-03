@@ -28,6 +28,156 @@ export interface FeishuChannelOpts {
   registeredGroups: () => Record<string, RegisteredGroup>;
 }
 
+type PostTag =
+  | { tag: 'text'; text: string; style?: string[] }
+  | { tag: 'a'; text: string; href: string; style?: string[] }
+  | { tag: 'code_block'; language: string; text: string };
+
+/**
+ * Check if text contains markdown formatting worth converting to rich text.
+ */
+function hasMarkdown(text: string): boolean {
+  return /\*\*.+?\*\*|__.+?__|`.+?`|\[.+?\]\(.+?\)|^#{1,6}\s|```/m.test(text);
+}
+
+/**
+ * Parse a single line of markdown into an array of Feishu post tags.
+ * Handles: **bold**, *italic*, `code`, [link](url)
+ */
+function parseInlineTags(line: string): PostTag[] {
+  const tags: PostTag[] = [];
+  const re = /(\*\*(.+?)\*\*|__(.+?)__|\*(.+?)\*|_([^_]+?)_|`([^`]+?)`|\[([^\]]+?)\]\(([^)]+?)\))/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = re.exec(line)) !== null) {
+    if (match.index > lastIndex) {
+      tags.push({ tag: 'text', text: line.slice(lastIndex, match.index) });
+    }
+
+    if (match[2] || match[3]) {
+      // **bold** or __bold__
+      tags.push({ tag: 'text', text: match[2] || match[3], style: ['bold'] });
+    } else if (match[4] || match[5]) {
+      // *italic* or _italic_
+      tags.push({ tag: 'text', text: match[4] || match[5], style: ['italic'] });
+    } else if (match[6]) {
+      // `code` — render as bold for inline code (Feishu has no inline code tag)
+      tags.push({ tag: 'text', text: match[6], style: ['bold'] });
+    } else if (match[7] && match[8]) {
+      // [text](url)
+      tags.push({ tag: 'a', text: match[7], href: match[8] });
+    }
+
+    lastIndex = match.index + match[0].length;
+  }
+
+  if (lastIndex < line.length) {
+    tags.push({ tag: 'text', text: line.slice(lastIndex) });
+  }
+
+  if (tags.length === 0) {
+    tags.push({ tag: 'text', text: line });
+  }
+
+  return tags;
+}
+
+/**
+ * Convert markdown text to Feishu post content structure.
+ */
+export function markdownToPost(text: string): { post: { zh_cn: { title: string; content: (PostTag | PostTag[])[][] } } } {
+  const lines = text.split('\n');
+  const paragraphs: PostTag[][] = [];
+  let inCodeBlock = false;
+  let codeBlockLines: string[] = [];
+  let codeBlockLang = '';
+
+  for (const line of lines) {
+    if (line.trimStart().startsWith('```')) {
+      if (inCodeBlock) {
+        paragraphs.push([{ tag: 'code_block', language: codeBlockLang || 'PLAIN', text: codeBlockLines.join('\n') }]);
+        codeBlockLines = [];
+        codeBlockLang = '';
+        inCodeBlock = false;
+      } else {
+        codeBlockLang = line.trimStart().slice(3).trim();
+        inCodeBlock = true;
+      }
+      continue;
+    }
+
+    if (inCodeBlock) {
+      codeBlockLines.push(line);
+      continue;
+    }
+
+    if (!line.trim()) continue;
+
+    // Heading → bold text
+    const headingMatch = line.match(/^(#{1,6})\s+(.+)/);
+    if (headingMatch) {
+      const level = headingMatch[1].length;
+      const text = headingMatch[2];
+      if (level <= 2) {
+        // H1/H2: bold with underline decoration
+        paragraphs.push([{ tag: 'text', text: `━━ ${text} ━━`, style: ['bold'] }]);
+      } else if (level === 3) {
+        // H3: bold with bullet prefix
+        paragraphs.push([{ tag: 'text', text: `▎${text}`, style: ['bold'] }]);
+      } else {
+        // H4+: bold only
+        paragraphs.push([{ tag: 'text', text, style: ['bold'] }]);
+      }
+      continue;
+    }
+
+    // Bullet points
+    const bulletMatch = line.match(/^(\s*[-*•]\s+)(.*)/);
+    if (bulletMatch) {
+      const tags = parseInlineTags(bulletMatch[2]);
+      paragraphs.push([{ tag: 'text', text: '• ' }, ...tags]);
+      continue;
+    }
+
+    // Numbered list
+    const numMatch = line.match(/^(\s*\d+\.\s+)(.*)/);
+    if (numMatch) {
+      const tags = parseInlineTags(numMatch[2]);
+      paragraphs.push([{ tag: 'text', text: numMatch[1] }, ...tags]);
+      continue;
+    }
+
+    // Blockquote
+    const quoteMatch = line.match(/^>\s?(.*)/);
+    if (quoteMatch) {
+      const tags = parseInlineTags(quoteMatch[1]);
+      paragraphs.push([{ tag: 'text', text: '❝ ' }, ...tags, { tag: 'text', text: ' ❞' }]);
+      continue;
+    }
+
+    // Horizontal rule
+    if (/^---+$/.test(line.trim())) {
+      continue; // skip hr lines
+    }
+
+    paragraphs.push(parseInlineTags(line));
+  }
+
+  if (inCodeBlock && codeBlockLines.length > 0) {
+    paragraphs.push([{ tag: 'code_block', language: codeBlockLang || 'PLAIN', text: codeBlockLines.join('\n') }]);
+  }
+
+  return {
+    post: {
+      zh_cn: {
+        title: '',
+        content: paragraphs,
+      },
+    },
+  };
+}
+
 export class FeishuChannel implements Channel {
   name = 'feishu';
 
@@ -44,10 +194,13 @@ export class FeishuChannel implements Channel {
   private userNameCache = new Map<string, string>();
   /** Text batching: Feishu clients split long messages at ~4096 chars.
    *  Buffer chunks from same sender in same chat and flush after a delay. */
-  private textBatch = new Map<string, {
-    timer: ReturnType<typeof setTimeout>;
-    chunks: Array<{ data: any; content: string }>;
-  }>();
+  private textBatch = new Map<
+    string,
+    {
+      timer: ReturnType<typeof setTimeout>;
+      chunks: Array<{ data: any; content: string }>;
+    }
+  >();
   private opts: FeishuChannelOpts;
   private dispatcher: lark.EventDispatcher;
 
@@ -131,7 +284,10 @@ export class FeishuChannel implements Channel {
    * Download a file from a Feishu message and save to the group's workspace.
    * Returns the container-relative path or null on failure.
    */
-  private async downloadFile(jid: string, message: any): Promise<string | null> {
+  private async downloadFile(
+    jid: string,
+    message: any,
+  ): Promise<string | null> {
     try {
       const messageId = message.message_id;
       let fileKey = '';
@@ -186,7 +342,10 @@ export class FeishuChannel implements Channel {
    * Download a media file (video/audio) from a Feishu message.
    * Returns the container-relative path or null on failure.
    */
-  private async downloadMedia(jid: string, message: any): Promise<string | null> {
+  private async downloadMedia(
+    jid: string,
+    message: any,
+  ): Promise<string | null> {
     try {
       const messageId = message.message_id;
       let fileKey = '';
@@ -284,10 +443,16 @@ export class FeishuChannel implements Channel {
         return null;
       }
 
-      logger.info({ jid, messageId, imageKey, filename }, 'Feishu image downloaded (post)');
+      logger.info(
+        { jid, messageId, imageKey, filename },
+        'Feishu image downloaded (post)',
+      );
       return `/workspace/group/uploads/${filename}`;
     } catch (err) {
-      logger.warn({ jid, imageKey, err }, 'Feishu: failed to download post image');
+      logger.warn(
+        { jid, imageKey, err },
+        'Feishu: failed to download post image',
+      );
       return null;
     }
   }
@@ -300,16 +465,37 @@ export class FeishuChannel implements Channel {
   private async parsePostMessage(jid: string, message: any): Promise<string> {
     try {
       const parsed = JSON.parse(message.content);
-      logger.info({ jid, parsedKeys: Object.keys(parsed || {}), rawContent: message.content?.slice(0, 500) }, 'Feishu: parsePostMessage debug');
+      logger.info(
+        {
+          jid,
+          parsedKeys: Object.keys(parsed || {}),
+          rawContent: message.content?.slice(0, 500),
+        },
+        'Feishu: parsePostMessage debug',
+      );
       // Post content may be nested under a locale key (zh_cn, en_us) or directly at top level
-      const post = parsed?.zh_cn || parsed?.en_us || parsed?.ja_jp
-        || (parsed?.content ? parsed : null)
-        || Object.values(parsed || {})[0] as any;
+      const post =
+        parsed?.zh_cn ||
+        parsed?.en_us ||
+        parsed?.ja_jp ||
+        (parsed?.content ? parsed : null) ||
+        (Object.values(parsed || {})[0] as any);
       if (!post) {
-        logger.warn({ jid, parsedKeys: Object.keys(parsed || {}) }, 'Feishu: post has no locale key');
+        logger.warn(
+          { jid, parsedKeys: Object.keys(parsed || {}) },
+          'Feishu: post has no locale key',
+        );
         return '[post message - could not parse]';
       }
-      logger.info({ jid, title: post.title, contentLength: post.content?.length, postKeys: Object.keys(post || {}) }, 'Feishu: post structure');
+      logger.info(
+        {
+          jid,
+          title: post.title,
+          contentLength: post.content?.length,
+          postKeys: Object.keys(post || {}),
+        },
+        'Feishu: post structure',
+      );
 
       const title = post.title || '';
       const contentBlocks: Array<Array<any>> = post.content || [];
@@ -323,18 +509,31 @@ export class FeishuChannel implements Channel {
           if (block.tag === 'text') {
             parts.push(block.text || '');
           } else if (block.tag === 'a') {
-            parts.push(block.text ? `${block.text} (${block.href || ''})` : block.href || '');
+            parts.push(
+              block.text
+                ? `${block.text} (${block.href || ''})`
+                : block.href || '',
+            );
           } else if (block.tag === 'img' && block.image_key) {
-            const imgPath = await this.downloadImageByKey(jid, messageId, block.image_key);
+            const imgPath = await this.downloadImageByKey(
+              jid,
+              messageId,
+              block.image_key,
+            );
             if (imgPath) {
-              parts.push(`[Image: ${imgPath}]\nUse the Read tool to view this image.`);
+              parts.push(
+                `[Image: ${imgPath}]\nUse the Read tool to view this image.`,
+              );
             }
           }
         }
       }
 
       const result = parts.join('\n') || '[empty post message]';
-      logger.info({ jid, resultLength: result.length, result: result.slice(0, 200) }, 'Feishu: parsePostMessage result');
+      logger.info(
+        { jid, resultLength: result.length, result: result.slice(0, 200) },
+        'Feishu: parsePostMessage result',
+      );
       return result;
     } catch (err) {
       logger.warn({ jid, err }, 'Feishu: failed to parse post message');
@@ -447,7 +646,10 @@ export class FeishuChannel implements Channel {
     // Parse message content — Feishu sends JSON strings
     let content = '';
     const msgType = message.message_type;
-    logger.info({ jid, msgType, contentKeys: Object.keys(message).join(',') }, 'Feishu: incoming message type');
+    logger.info(
+      { jid, msgType, contentKeys: Object.keys(message).join(',') },
+      'Feishu: incoming message type',
+    );
 
     // Text messages may be split by Feishu client at ~4096 chars — batch them
     if (msgType === 'text') {
@@ -459,7 +661,10 @@ export class FeishuChannel implements Channel {
       }
       if (!content) return;
 
-      const senderId = data.sender?.sender_id?.open_id || data.sender?.sender_id?.user_id || '';
+      const senderId =
+        data.sender?.sender_id?.open_id ||
+        data.sender?.sender_id?.user_id ||
+        '';
       const batchKey = `${jid}:${senderId}`;
       const existing = this.textBatch.get(batchKey);
 
@@ -480,11 +685,20 @@ export class FeishuChannel implements Channel {
 
       batch.timer = setTimeout(() => {
         this.textBatch.delete(batchKey);
-        const combined = batch.chunks.map(c => c.content).join('');
+        const combined = batch.chunks.map((c) => c.content).join('');
         const lastChunk = batch.chunks[batch.chunks.length - 1];
-        logger.info({ jid, chunks: batch.chunks.length, totalLength: combined.length }, 'Feishu: text batch flushed');
-        this.emitMessage(jid, lastChunk.data, combined, message.message_id)
-          .catch(err => logger.error({ jid, err }, 'Feishu: emitMessage error'));
+        logger.info(
+          { jid, chunks: batch.chunks.length, totalLength: combined.length },
+          'Feishu: text batch flushed',
+        );
+        this.emitMessage(
+          jid,
+          lastChunk.data,
+          combined,
+          message.message_id,
+        ).catch((err) =>
+          logger.error({ jid, err }, 'Feishu: emitMessage error'),
+        );
       }, delay);
       return;
     }
@@ -541,7 +755,12 @@ export class FeishuChannel implements Channel {
   }
 
   /** Emit a parsed message to the pipeline (sender resolution + trigger translation) */
-  private async emitMessage(jid: string, data: any, content: string, messageId: string): Promise<void> {
+  private async emitMessage(
+    jid: string,
+    data: any,
+    content: string,
+    messageId: string,
+  ): Promise<void> {
     const message = data?.message;
     const rawTime = parseInt(message?.create_time, 10);
     const timestamp = new Date(
@@ -593,8 +812,9 @@ export class FeishuChannel implements Channel {
     await this.flushOutgoingQueue();
   }
 
-  async sendMessage(jid: string, text: string): Promise<void> {
+  async sendMessage(jid: string, text: string): Promise<string | undefined> {
     const chatId = jid.replace(/^feishu:/, '');
+    let firstMessageId: string | undefined;
 
     if (!this.connected) {
       this.outgoingQueue.push({ jid, text });
@@ -611,16 +831,79 @@ export class FeishuChannel implements Channel {
 
       // Send text portion
       if (cleanText) {
-        const chunks = this.splitText(cleanText);
-        for (const chunk of chunks) {
-          await this.client.im.message.create({
-            params: { receive_id_type: 'chat_id' },
-            data: {
-              receive_id: chatId,
-              msg_type: 'text',
-              content: JSON.stringify({ text: chunk }),
-            },
-          });
+        const isVerbose = cleanText.startsWith('▎');
+        if (!isVerbose && hasMarkdown(cleanText)) {
+          // Try interactive card (JSON 2.0) for native markdown rendering (headings, tables, etc.)
+          // Fall back to post format, then plain text
+          try {
+            const cardContent = JSON.stringify({
+              schema: '2.0',
+              body: {
+                elements: [{ tag: 'markdown', content: cleanText }],
+              },
+            });
+            const resp = await this.client.im.message.create({
+              params: { receive_id_type: 'chat_id' },
+              data: {
+                receive_id: chatId,
+                msg_type: 'interactive',
+                content: cardContent,
+              },
+            });
+            if (!firstMessageId && resp?.data?.message_id) {
+              firstMessageId = resp.data.message_id;
+            }
+          } catch (cardErr) {
+            logger.warn({ chatId, err: cardErr }, 'Feishu card message failed, falling back to post format');
+            try {
+              const postContent = markdownToPost(cleanText);
+              const resp = await this.client.im.message.create({
+                params: { receive_id_type: 'chat_id' },
+                data: {
+                  receive_id: chatId,
+                  msg_type: 'post',
+                  content: JSON.stringify({
+                    zh_cn: postContent.post.zh_cn,
+                  }),
+                },
+              });
+              if (!firstMessageId && resp?.data?.message_id) {
+                firstMessageId = resp.data.message_id;
+              }
+            } catch (postErr) {
+              logger.warn({ chatId, err: postErr }, 'Feishu post message failed, falling back to plain text');
+              const chunks = this.splitText(cleanText);
+              for (const chunk of chunks) {
+                const resp = await this.client.im.message.create({
+                  params: { receive_id_type: 'chat_id' },
+                  data: {
+                    receive_id: chatId,
+                    msg_type: 'text',
+                    content: JSON.stringify({ text: chunk }),
+                  },
+                });
+                if (!firstMessageId && resp?.data?.message_id) {
+                  firstMessageId = resp.data.message_id;
+                }
+              }
+            }
+          }
+        } else {
+          // Plain text — send as-is
+          const chunks = this.splitText(cleanText);
+          for (const chunk of chunks) {
+            const resp = await this.client.im.message.create({
+              params: { receive_id_type: 'chat_id' },
+              data: {
+                receive_id: chatId,
+                msg_type: 'text',
+                content: JSON.stringify({ text: chunk }),
+              },
+            });
+            if (!firstMessageId && resp?.data?.message_id) {
+              firstMessageId = resp.data.message_id;
+            }
+          }
         }
       }
 
@@ -655,6 +938,7 @@ export class FeishuChannel implements Channel {
         { jid, length: text.length, fileCount: filePaths.length },
         'Feishu message sent',
       );
+      return firstMessageId;
     } catch (err) {
       this.outgoingQueue.push({ jid, text });
       logger.warn(

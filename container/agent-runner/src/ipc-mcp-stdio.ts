@@ -124,6 +124,13 @@ SCHEDULE VALUE FORMAT (all times are LOCAL timezone):
       .describe(
         'Optional bash script to run before waking the agent. Script must output JSON on the last line of stdout: { "wakeAgent": boolean, "data"?: any }. If wakeAgent is false, the agent is not called. Test your script with bash -c "..." before scheduling.',
       ),
+    is_reminder: z
+      .boolean()
+      .optional()
+      .default(false)
+      .describe(
+        'Set to true for reminder-type tasks where the user needs to acknowledge completion. The system will automatically follow up if the user hasn\'t reacted with DONE.',
+      ),
   },
   async (args) => {
     // Validate schedule_value before writing IPC
@@ -194,6 +201,7 @@ SCHEDULE VALUE FORMAT (all times are LOCAL timezone):
       taskId,
       prompt: args.prompt,
       script: args.script || undefined,
+      is_reminder: args.is_reminder || false,
       schedule_type: args.schedule_type,
       schedule_value: args.schedule_value,
       context_mode: args.context_mode || 'group',

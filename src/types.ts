@@ -64,6 +64,7 @@ export interface ScheduledTask {
   chat_jid: string;
   prompt: string;
   script?: string | null;
+  is_reminder?: boolean;
   schedule_type: 'cron' | 'interval' | 'once';
   schedule_value: string;
   context_mode: 'group' | 'isolated';
@@ -88,7 +89,7 @@ export interface TaskRunLog {
 export interface Channel {
   name: string;
   connect(): Promise<void>;
-  sendMessage(jid: string, text: string): Promise<void>;
+  sendMessage(jid: string, text: string): Promise<string | undefined>;
   isConnected(): boolean;
   ownsJid(jid: string): boolean;
   disconnect(): Promise<void>;

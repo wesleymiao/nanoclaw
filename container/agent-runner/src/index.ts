@@ -122,6 +122,23 @@ function formatToolNotification(name: string, input: any): string {
   else if (name === 'WebFetch') preview = input?.url || '';
   else if (name === 'Glob') preview = input?.pattern || '';
   else if (name === 'Agent') preview = input?.description || input?.prompt?.slice(0, 60) || '';
+  else if (name === 'TaskOutput') preview = `task_id=${input?.task_id || '?'}, block=${input?.block ?? true}`;
+  else if (name === 'TodoWrite') preview = (input?.todos || []).map((t: any) => `${t.status === 'completed' ? '✅' : t.status === 'in_progress' ? '🔄' : '⬜'} ${(t.content || '').slice(0, 40)}`).join(' | ') || '...';
+  else if (name === 'TaskCreate') preview = input?.subject || input?.description?.slice(0, 60) || '';
+  else if (name === 'TaskUpdate') preview = `${input?.taskId || '?'} → ${input?.status || '?'}`;
+  else if (name === 'TaskStop') preview = `stop ${input?.task_id || '?'}`;
+  else if (name.startsWith('mcp__')) {
+    // MCP tools: show key params as JSON summary
+    const shortName = name.replace(/^mcp__\w+__/, '');
+    const params = input ? Object.entries(input)
+      .filter(([, v]) => v !== undefined && v !== null && v !== '')
+      .map(([k, v]) => {
+        const sv = typeof v === 'string' ? (v.length > 60 ? v.slice(0, 57) + '...' : v) : JSON.stringify(v);
+        return `${k}=${sv}`;
+      })
+      .join(', ') : '';
+    return `🔨 ${shortName}: ${params || '...'}`;
+  }
   return `${icon} ${name}: ${preview || '...'}`;
 }
 const IPC_INPUT_CLOSE_SENTINEL = path.join(IPC_INPUT_DIR, '_close');
@@ -703,32 +720,39 @@ async function runScript(script: string): Promise<ScriptResult | null> {
           log(`Script stderr: ${stderr.slice(0, 500)}`);
         }
 
-        if (error) {
-          log(`Script error: ${error.message}`);
-          return resolve(null);
-        }
-
-        // Parse last non-empty line of stdout as JSON
-        const lines = stdout.trim().split('\n');
+        // Try to parse JSON from stdout first (works for both exit 0 and non-zero)
+        const lines = (stdout || '').trim().split('\n');
         const lastLine = lines[lines.length - 1];
-        if (!lastLine) {
-          log('Script produced no output');
-          return resolve(null);
+        if (lastLine) {
+          try {
+            const result = JSON.parse(lastLine);
+            if (typeof result.wakeAgent === 'boolean') {
+              return resolve(result as ScriptResult);
+            }
+          } catch {
+            // Not JSON, fall through
+          }
         }
 
-        try {
-          const result = JSON.parse(lastLine);
-          if (typeof result.wakeAgent !== 'boolean') {
-            log(
-              `Script output missing wakeAgent boolean: ${lastLine.slice(0, 200)}`,
-            );
-            return resolve(null);
-          }
-          resolve(result as ScriptResult);
-        } catch {
-          log(`Script output is not valid JSON: ${lastLine.slice(0, 200)}`);
-          resolve(null);
+        if (error) {
+          // Script exited non-zero with no JSON output.
+          // Treat non-zero exit as "condition not met" → wake agent.
+          // This supports simple check scripts like:
+          //   feishu reactions MSG_ID --has DONE
+          // where exit 0 = condition met (don't wake), exit 1 = not met (wake).
+          log(`Script exited non-zero (${error.message}), treating as wakeAgent=true`);
+          return resolve({ wakeAgent: true, data: { scriptExitError: true, stderr: (stderr || '').slice(0, 500) } });
         }
+
+        // Script exited 0 with no JSON output → condition met, don't wake
+        if (!lastLine) {
+          log('Script exited 0 with no output, treating as wakeAgent=false');
+          return resolve({ wakeAgent: false });
+        }
+
+        // Script exited 0 but output wasn't valid JSON
+        log(`Script output is not valid JSON: ${lastLine.slice(0, 200)}`);
+        resolve(null);
       },
     );
   });
@@ -779,6 +803,7 @@ async function main(): Promise<void> {
   let prompt = containerInput.prompt;
   if (containerInput.isScheduledTask) {
     prompt = `[SCHEDULED TASK - The following message was sent automatically and is not coming directly from the user or group.]\n\n${prompt}`;
+
   }
   const pending = drainIpcInput();
   if (pending.length > 0) {
