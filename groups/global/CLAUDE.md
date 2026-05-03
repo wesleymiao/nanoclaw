@@ -153,6 +153,8 @@ When your response contains rich content (tables, charts, comparisons, dashboard
 
 ## Task Scripts
 
+**Timezone:** The scheduling system uses Asia/Shanghai (Beijing time). When users say "10pm", use `0 22 * * *` directly — do NOT convert to UTC. All cron expressions are interpreted in Beijing time.
+
 For any recurring task, use `schedule_task`. Frequent agent invocations — especially multiple times a day — consume API credits and can risk account restrictions. If a simple check can determine whether action is needed, add a `script` — it runs first, and the agent is only called when the check passes. This keeps invocations to a minimum.
 
 ### How it works

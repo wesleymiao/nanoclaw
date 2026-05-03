@@ -46,7 +46,8 @@ function hasMarkdown(text: string): boolean {
  */
 function parseInlineTags(line: string): PostTag[] {
   const tags: PostTag[] = [];
-  const re = /(\*\*(.+?)\*\*|__(.+?)__|\*(.+?)\*|_([^_]+?)_|`([^`]+?)`|\[([^\]]+?)\]\(([^)]+?)\))/g;
+  const re =
+    /(\*\*(.+?)\*\*|__(.+?)__|\*(.+?)\*|_([^_]+?)_|`([^`]+?)`|\[([^\]]+?)\]\(([^)]+?)\))/g;
   let lastIndex = 0;
   let match: RegExpExecArray | null;
 
@@ -86,7 +87,9 @@ function parseInlineTags(line: string): PostTag[] {
 /**
  * Convert markdown text to Feishu post content structure.
  */
-export function markdownToPost(text: string): { post: { zh_cn: { title: string; content: (PostTag | PostTag[])[][] } } } {
+export function markdownToPost(text: string): {
+  post: { zh_cn: { title: string; content: (PostTag | PostTag[])[][] } };
+} {
   const lines = text.split('\n');
   const paragraphs: PostTag[][] = [];
   let inCodeBlock = false;
@@ -96,7 +99,13 @@ export function markdownToPost(text: string): { post: { zh_cn: { title: string; 
   for (const line of lines) {
     if (line.trimStart().startsWith('```')) {
       if (inCodeBlock) {
-        paragraphs.push([{ tag: 'code_block', language: codeBlockLang || 'PLAIN', text: codeBlockLines.join('\n') }]);
+        paragraphs.push([
+          {
+            tag: 'code_block',
+            language: codeBlockLang || 'PLAIN',
+            text: codeBlockLines.join('\n'),
+          },
+        ]);
         codeBlockLines = [];
         codeBlockLang = '';
         inCodeBlock = false;
@@ -121,7 +130,9 @@ export function markdownToPost(text: string): { post: { zh_cn: { title: string; 
       const text = headingMatch[2];
       if (level <= 2) {
         // H1/H2: bold with underline decoration
-        paragraphs.push([{ tag: 'text', text: `━━ ${text} ━━`, style: ['bold'] }]);
+        paragraphs.push([
+          { tag: 'text', text: `━━ ${text} ━━`, style: ['bold'] },
+        ]);
       } else if (level === 3) {
         // H3: bold with bullet prefix
         paragraphs.push([{ tag: 'text', text: `▎${text}`, style: ['bold'] }]);
@@ -152,7 +163,11 @@ export function markdownToPost(text: string): { post: { zh_cn: { title: string; 
     const quoteMatch = line.match(/^>\s?(.*)/);
     if (quoteMatch) {
       const tags = parseInlineTags(quoteMatch[1]);
-      paragraphs.push([{ tag: 'text', text: '❝ ' }, ...tags, { tag: 'text', text: ' ❞' }]);
+      paragraphs.push([
+        { tag: 'text', text: '❝ ' },
+        ...tags,
+        { tag: 'text', text: ' ❞' },
+      ]);
       continue;
     }
 
@@ -165,7 +180,13 @@ export function markdownToPost(text: string): { post: { zh_cn: { title: string; 
   }
 
   if (inCodeBlock && codeBlockLines.length > 0) {
-    paragraphs.push([{ tag: 'code_block', language: codeBlockLang || 'PLAIN', text: codeBlockLines.join('\n') }]);
+    paragraphs.push([
+      {
+        tag: 'code_block',
+        language: codeBlockLang || 'PLAIN',
+        text: codeBlockLines.join('\n'),
+      },
+    ]);
   }
 
   return {
@@ -854,7 +875,10 @@ export class FeishuChannel implements Channel {
               firstMessageId = resp.data.message_id;
             }
           } catch (cardErr) {
-            logger.warn({ chatId, err: cardErr }, 'Feishu card message failed, falling back to post format');
+            logger.warn(
+              { chatId, err: cardErr },
+              'Feishu card message failed, falling back to post format',
+            );
             try {
               const postContent = markdownToPost(cleanText);
               const resp = await this.client.im.message.create({
@@ -871,7 +895,10 @@ export class FeishuChannel implements Channel {
                 firstMessageId = resp.data.message_id;
               }
             } catch (postErr) {
-              logger.warn({ chatId, err: postErr }, 'Feishu post message failed, falling back to plain text');
+              logger.warn(
+                { chatId, err: postErr },
+                'Feishu post message failed, falling back to plain text',
+              );
               const chunks = this.splitText(cleanText);
               for (const chunk of chunks) {
                 const resp = await this.client.im.message.create({
