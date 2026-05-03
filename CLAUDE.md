@@ -58,6 +58,12 @@ npm run build        # Compile TypeScript
 ./container/build.sh # Rebuild agent container
 ```
 
+**Agent SDK & Claude Code version sync:** The container mounts the host's Claude Code binary and uses the Agent SDK npm package as a thin wrapper. When Claude Code auto-updates on the host, bump the SDK to match:
+```bash
+cd container/agent-runner && npm install @anthropic-ai/claude-agent-sdk@latest && cd ../.. && ./container/build.sh
+```
+Check versions: `claude --version` (host) vs `npm view @anthropic-ai/claude-agent-sdk version` (latest SDK).
+
 Service management:
 ```bash
 # macOS (launchd)
