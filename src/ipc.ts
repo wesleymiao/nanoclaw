@@ -5,7 +5,13 @@ import { CronExpressionParser } from 'cron-parser';
 
 import { DATA_DIR, IPC_POLL_INTERVAL, TIMEZONE } from './config.js';
 import { AvailableGroup } from './container-runner.js';
-import { createTask, deleteTask, getTaskById, searchMessages, updateTask } from './db.js';
+import {
+  createTask,
+  deleteTask,
+  getTaskById,
+  searchMessages,
+  updateTask,
+} from './db.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
 import { RegisteredGroup } from './types.js';
@@ -249,19 +255,27 @@ export function startIpcWatcher(deps: IpcDeps): void {
                 });
                 const formatted = rows
                   .map((r) => {
-                    const sender = r.is_from_me ? 'Andy' : (r.sender_name || 'Unknown');
+                    const sender = r.is_from_me
+                      ? 'Andy'
+                      : r.sender_name || 'Unknown';
                     const time = r.timestamp;
-                    const content = r.content.length > 500
-                      ? r.content.substring(0, 500) + '...'
-                      : r.content;
+                    const content =
+                      r.content.length > 500
+                        ? r.content.substring(0, 500) + '...'
+                        : r.content;
                     return `[${time}] ${sender}: ${content}`;
                   })
                   .join('\n\n');
-                const result = rows.length === 0
-                  ? 'No messages found.'
-                  : `Found ${rows.length} message(s):\n\n${formatted}`;
+                const result =
+                  rows.length === 0
+                    ? 'No messages found.'
+                    : `Found ${rows.length} message(s):\n\n${formatted}`;
 
-                const responseDir = path.join(ipcBaseDir, sourceGroup, 'responses');
+                const responseDir = path.join(
+                  ipcBaseDir,
+                  sourceGroup,
+                  'responses',
+                );
                 fs.mkdirSync(responseDir, { recursive: true });
                 const id = path.basename(file, '.json');
                 fs.writeFileSync(
@@ -274,12 +288,18 @@ export function startIpcWatcher(deps: IpcDeps): void {
                 );
               }
             } catch (err) {
-              logger.error({ file, sourceGroup, err }, 'Error processing IPC query');
+              logger.error(
+                { file, sourceGroup, err },
+                'Error processing IPC query',
+              );
             }
           }
         }
       } catch (err) {
-        logger.error({ err, sourceGroup }, 'Error reading IPC queries directory');
+        logger.error(
+          { err, sourceGroup },
+          'Error reading IPC queries directory',
+        );
       }
     }
 

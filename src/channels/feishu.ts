@@ -28,7 +28,6 @@ export interface FeishuChannelOpts {
   registeredGroups: () => Record<string, RegisteredGroup>;
 }
 
-
 export class FeishuChannel implements Channel {
   name = 'feishu';
 

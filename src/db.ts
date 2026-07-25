@@ -417,7 +417,12 @@ export function searchMessages(
     before?: string;
     after?: string;
   },
-): { sender_name: string | null; content: string; timestamp: string; is_from_me: number }[] {
+): {
+  sender_name: string | null;
+  content: string;
+  timestamp: string;
+  is_from_me: number;
+}[] {
   const conditions = ['chat_jid = ?'];
   const params: (string | number)[] = [chatJid];
 
