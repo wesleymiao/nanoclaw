@@ -303,7 +303,14 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
       logger.info({ group: group.name }, `Agent output: ${raw.length} chars`);
       if (text) {
-        logger.info({ group: group.name, textSnippet: text.slice(0, 100), hasMarkdownChars: /\*\*|__|`/.test(text) }, 'Sending agent output to channel');
+        logger.info(
+          {
+            group: group.name,
+            textSnippet: text.slice(0, 100),
+            hasMarkdownChars: /\*\*|__|`/.test(text),
+          },
+          'Sending agent output to channel',
+        );
         await channel.sendMessage(chatJid, text);
         outputSentToUser = true;
       }

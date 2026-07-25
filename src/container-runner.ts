@@ -259,13 +259,20 @@ function buildVolumeMounts(
     'agent-runner-src',
   );
   if (fs.existsSync(agentRunnerSrc)) {
-    const srcIndex = path.join(agentRunnerSrc, 'index.ts');
-    const cachedIndex = path.join(groupAgentRunnerDir, 'index.ts');
-    const needsCopy =
-      !fs.existsSync(groupAgentRunnerDir) ||
-      !fs.existsSync(cachedIndex) ||
-      (fs.existsSync(srcIndex) &&
-        fs.statSync(srcIndex).mtimeMs > fs.statSync(cachedIndex).mtimeMs);
+    // Check if any source file is newer than its cached copy
+    let needsCopy = !fs.existsSync(groupAgentRunnerDir);
+    if (!needsCopy) {
+      const srcFiles = fs.readdirSync(agentRunnerSrc).filter(f => f.endsWith('.ts'));
+      for (const file of srcFiles) {
+        const srcFile = path.join(agentRunnerSrc, file);
+        const cachedFile = path.join(groupAgentRunnerDir, file);
+        if (!fs.existsSync(cachedFile) ||
+            fs.statSync(srcFile).mtimeMs > fs.statSync(cachedFile).mtimeMs) {
+          needsCopy = true;
+          break;
+        }
+      }
+    }
     if (needsCopy) {
       fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, { recursive: true });
     }
@@ -362,7 +369,8 @@ async function buildContainerArgs(
   }
 
   // Mount host Claude Code binary for the Agent SDK
-  const claudeBinary = '/usr/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe';
+  const claudeBinary =
+    '/usr/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe';
   if (fs.existsSync(claudeBinary)) {
     mounts.push({
       hostPath: claudeBinary,

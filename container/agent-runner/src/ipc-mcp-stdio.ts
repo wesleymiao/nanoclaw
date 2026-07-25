@@ -14,6 +14,8 @@ import { CronExpressionParser } from 'cron-parser';
 const IPC_DIR = '/workspace/ipc';
 const MESSAGES_DIR = path.join(IPC_DIR, 'messages');
 const TASKS_DIR = path.join(IPC_DIR, 'tasks');
+const QUERIES_DIR = path.join(IPC_DIR, 'queries');
+const RESPONSES_DIR = path.join(IPC_DIR, 'responses');
 
 // Context from environment variables (set by the agent runner)
 const chatJid = process.env.NANOCLAW_CHAT_JID!;
@@ -111,6 +113,45 @@ server.tool(
     writeIpcFile(MESSAGES_DIR, data);
 
     return { content: [{ type: 'text' as const, text: 'Message sent.' }] };
+  },
+);
+
+server.tool(
+  'search_messages',
+  'Search chat message history. Returns messages from this chat including those sent by users, the assistant, and scheduled tasks. Use this instead of feishu history for reliable access to all messages.',
+  {
+    query: z.string().optional().describe('Text to search for (case-insensitive substring match). Omit to get recent messages.'),
+    limit: z.number().optional().default(20).describe('Max messages to return (default 20, max 100)'),
+    before: z.string().optional().describe('ISO timestamp — only return messages before this time'),
+    after: z.string().optional().describe('ISO timestamp — only return messages after this time'),
+  },
+  async (args) => {
+    const id = writeIpcFile(QUERIES_DIR, {
+      type: 'search_messages',
+      chatJid,
+      query: args.query,
+      limit: Math.min(args.limit || 20, 100),
+      before: args.before,
+      after: args.after,
+    });
+
+    // Poll for response from host
+    const basename = id.replace('.json', '');
+    const responsePath = path.join(RESPONSES_DIR, `${basename}.json`);
+    const deadline = Date.now() + 10000;
+    while (Date.now() < deadline) {
+      try {
+        if (fs.existsSync(responsePath)) {
+          const data = JSON.parse(fs.readFileSync(responsePath, 'utf-8'));
+          fs.unlinkSync(responsePath);
+          return { content: [{ type: 'text' as const, text: data.result }] };
+        }
+      } catch {
+        // file may be partially written, retry
+      }
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    return { content: [{ type: 'text' as const, text: 'Timeout waiting for message search results.' }] };
   },
 );
 

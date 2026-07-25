@@ -5,7 +5,7 @@ import { CronExpressionParser } from 'cron-parser';
 
 import { DATA_DIR, IPC_POLL_INTERVAL, TIMEZONE } from './config.js';
 import { AvailableGroup } from './container-runner.js';
-import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
+import { createTask, deleteTask, getTaskById, searchMessages, updateTask } from './db.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
 import { RegisteredGroup } from './types.js';
@@ -178,7 +178,12 @@ export function startIpcWatcher(deps: IpcDeps): void {
               await deps.sendMessage(chatJid, combined);
             }
             logger.info(
-              { chatJid, sourceGroup, batchSize: texts.length, groups: groups.length },
+              {
+                chatJid,
+                sourceGroup,
+                batchSize: texts.length,
+                groups: groups.length,
+              },
               'IPC message sent',
             );
           }
@@ -219,6 +224,62 @@ export function startIpcWatcher(deps: IpcDeps): void {
         }
       } catch (err) {
         logger.error({ err, sourceGroup }, 'Error reading IPC tasks directory');
+      }
+
+      // Process queries (request-response pattern) from this group's IPC directory
+      const queriesDir = path.join(ipcBaseDir, sourceGroup, 'queries');
+      try {
+        if (fs.existsSync(queriesDir)) {
+          const queryFiles = fs
+            .readdirSync(queriesDir)
+            .filter((f) => f.endsWith('.json'))
+            .sort();
+          for (const file of queryFiles) {
+            const filePath = path.join(queriesDir, file);
+            try {
+              const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+              fs.unlinkSync(filePath);
+
+              if (data.type === 'search_messages' && data.chatJid) {
+                const rows = searchMessages(data.chatJid, {
+                  query: data.query,
+                  limit: data.limit,
+                  before: data.before,
+                  after: data.after,
+                });
+                const formatted = rows
+                  .map((r) => {
+                    const sender = r.is_from_me ? 'Andy' : (r.sender_name || 'Unknown');
+                    const time = r.timestamp;
+                    const content = r.content.length > 500
+                      ? r.content.substring(0, 500) + '...'
+                      : r.content;
+                    return `[${time}] ${sender}: ${content}`;
+                  })
+                  .join('\n\n');
+                const result = rows.length === 0
+                  ? 'No messages found.'
+                  : `Found ${rows.length} message(s):\n\n${formatted}`;
+
+                const responseDir = path.join(ipcBaseDir, sourceGroup, 'responses');
+                fs.mkdirSync(responseDir, { recursive: true });
+                const id = path.basename(file, '.json');
+                fs.writeFileSync(
+                  path.join(responseDir, `${id}.json`),
+                  JSON.stringify({ result }),
+                );
+                logger.info(
+                  { sourceGroup, type: data.type, results: rows.length },
+                  'IPC query processed',
+                );
+              }
+            } catch (err) {
+              logger.error({ file, sourceGroup, err }, 'Error processing IPC query');
+            }
+          }
+        }
+      } catch (err) {
+        logger.error({ err, sourceGroup }, 'Error reading IPC queries directory');
       }
     }
 
@@ -350,7 +411,13 @@ export async function processTaskIpc(
           created_at: new Date().toISOString(),
         });
         logger.info(
-          { taskId, sourceGroup, targetFolder, contextMode, promptPrefix: data.prompt?.slice(0, 50) },
+          {
+            taskId,
+            sourceGroup,
+            targetFolder,
+            contextMode,
+            promptPrefix: data.prompt?.slice(0, 50),
+          },
           'Task created via IPC',
         );
         deps.onTasksChanged();

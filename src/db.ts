@@ -409,6 +409,52 @@ export function getMessagesSince(
     .all(chatJid, sinceTimestamp, `${botPrefix}:%`, limit) as NewMessage[];
 }
 
+export function searchMessages(
+  chatJid: string,
+  opts: {
+    query?: string;
+    limit?: number;
+    before?: string;
+    after?: string;
+  },
+): { sender_name: string | null; content: string; timestamp: string; is_from_me: number }[] {
+  const conditions = ['chat_jid = ?'];
+  const params: (string | number)[] = [chatJid];
+
+  if (opts.query) {
+    conditions.push('content LIKE ?');
+    params.push(`%${opts.query}%`);
+  }
+  if (opts.before) {
+    conditions.push('timestamp < ?');
+    params.push(opts.before);
+  }
+  if (opts.after) {
+    conditions.push('timestamp > ?');
+    params.push(opts.after);
+  }
+
+  const limit = Math.min(opts.limit || 20, 100);
+  params.push(limit);
+
+  const sql = `
+    SELECT * FROM (
+      SELECT sender_name, content, timestamp, is_from_me
+      FROM messages
+      WHERE ${conditions.join(' AND ')}
+        AND content != '' AND content IS NOT NULL
+      ORDER BY timestamp DESC
+      LIMIT ?
+    ) ORDER BY timestamp
+  `;
+  return db.prepare(sql).all(...params) as {
+    sender_name: string | null;
+    content: string;
+    timestamp: string;
+    is_from_me: number;
+  }[];
+}
+
 export function getLastBotMessageTimestamp(
   chatJid: string,
   botPrefix: string,

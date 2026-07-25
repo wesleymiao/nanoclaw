@@ -27,10 +27,12 @@ RUN apt-get update && apt-get install -y \
     git \
     gpg \
     libheif-examples \
+    libreoffice-impress \
     lsb-release \
     python3 \
     python3-pip \
-    && pip install --break-system-packages pillow pillow-heif \
+    && pip install --break-system-packages pillow pillow-heif weasyprint python-pptx exifread \
+    && ln -sf /usr/bin/python3 /usr/bin/python \
     && rm -rf /var/lib/apt/lists/*
 
 # Install GitHub CLI

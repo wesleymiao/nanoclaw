@@ -28,176 +28,6 @@ export interface FeishuChannelOpts {
   registeredGroups: () => Record<string, RegisteredGroup>;
 }
 
-type PostTag =
-  | { tag: 'text'; text: string; style?: string[] }
-  | { tag: 'a'; text: string; href: string; style?: string[] }
-  | { tag: 'code_block'; language: string; text: string };
-
-/**
- * Check if text contains markdown formatting worth converting to rich text.
- */
-function hasMarkdown(text: string): boolean {
-  return /\*\*.+?\*\*|__.+?__|`.+?`|\[.+?\]\(.+?\)|^#{1,6}\s|```/m.test(text);
-}
-
-/**
- * Parse a single line of markdown into an array of Feishu post tags.
- * Handles: **bold**, *italic*, `code`, [link](url)
- */
-function parseInlineTags(line: string): PostTag[] {
-  const tags: PostTag[] = [];
-  const re =
-    /(\*\*(.+?)\*\*|__(.+?)__|\*(.+?)\*|_([^_]+?)_|`([^`]+?)`|\[([^\]]+?)\]\(([^)]+?)\))/g;
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-
-  while ((match = re.exec(line)) !== null) {
-    if (match.index > lastIndex) {
-      tags.push({ tag: 'text', text: line.slice(lastIndex, match.index) });
-    }
-
-    if (match[2] || match[3]) {
-      // **bold** or __bold__
-      tags.push({ tag: 'text', text: match[2] || match[3], style: ['bold'] });
-    } else if (match[4] || match[5]) {
-      // *italic* or _italic_
-      tags.push({ tag: 'text', text: match[4] || match[5], style: ['italic'] });
-    } else if (match[6]) {
-      // `code` — render as bold for inline code (Feishu has no inline code tag)
-      tags.push({ tag: 'text', text: match[6], style: ['bold'] });
-    } else if (match[7] && match[8]) {
-      // [text](url)
-      tags.push({ tag: 'a', text: match[7], href: match[8] });
-    }
-
-    lastIndex = match.index + match[0].length;
-  }
-
-  if (lastIndex < line.length) {
-    tags.push({ tag: 'text', text: line.slice(lastIndex) });
-  }
-
-  if (tags.length === 0) {
-    tags.push({ tag: 'text', text: line });
-  }
-
-  return tags;
-}
-
-/**
- * Convert markdown text to Feishu post content structure.
- */
-export function markdownToPost(text: string): {
-  post: { zh_cn: { title: string; content: (PostTag | PostTag[])[][] } };
-} {
-  const lines = text.split('\n');
-  const paragraphs: PostTag[][] = [];
-  let inCodeBlock = false;
-  let codeBlockLines: string[] = [];
-  let codeBlockLang = '';
-
-  for (const line of lines) {
-    if (line.trimStart().startsWith('```')) {
-      if (inCodeBlock) {
-        paragraphs.push([
-          {
-            tag: 'code_block',
-            language: codeBlockLang || 'PLAIN',
-            text: codeBlockLines.join('\n'),
-          },
-        ]);
-        codeBlockLines = [];
-        codeBlockLang = '';
-        inCodeBlock = false;
-      } else {
-        codeBlockLang = line.trimStart().slice(3).trim();
-        inCodeBlock = true;
-      }
-      continue;
-    }
-
-    if (inCodeBlock) {
-      codeBlockLines.push(line);
-      continue;
-    }
-
-    if (!line.trim()) continue;
-
-    // Heading → bold text
-    const headingMatch = line.match(/^(#{1,6})\s+(.+)/);
-    if (headingMatch) {
-      const level = headingMatch[1].length;
-      const text = headingMatch[2];
-      if (level <= 2) {
-        // H1/H2: bold with underline decoration
-        paragraphs.push([
-          { tag: 'text', text: `━━ ${text} ━━`, style: ['bold'] },
-        ]);
-      } else if (level === 3) {
-        // H3: bold with bullet prefix
-        paragraphs.push([{ tag: 'text', text: `▎${text}`, style: ['bold'] }]);
-      } else {
-        // H4+: bold only
-        paragraphs.push([{ tag: 'text', text, style: ['bold'] }]);
-      }
-      continue;
-    }
-
-    // Bullet points
-    const bulletMatch = line.match(/^(\s*[-*•]\s+)(.*)/);
-    if (bulletMatch) {
-      const tags = parseInlineTags(bulletMatch[2]);
-      paragraphs.push([{ tag: 'text', text: '• ' }, ...tags]);
-      continue;
-    }
-
-    // Numbered list
-    const numMatch = line.match(/^(\s*\d+\.\s+)(.*)/);
-    if (numMatch) {
-      const tags = parseInlineTags(numMatch[2]);
-      paragraphs.push([{ tag: 'text', text: numMatch[1] }, ...tags]);
-      continue;
-    }
-
-    // Blockquote
-    const quoteMatch = line.match(/^>\s?(.*)/);
-    if (quoteMatch) {
-      const tags = parseInlineTags(quoteMatch[1]);
-      paragraphs.push([
-        { tag: 'text', text: '❝ ' },
-        ...tags,
-        { tag: 'text', text: ' ❞' },
-      ]);
-      continue;
-    }
-
-    // Horizontal rule
-    if (/^---+$/.test(line.trim())) {
-      continue; // skip hr lines
-    }
-
-    paragraphs.push(parseInlineTags(line));
-  }
-
-  if (inCodeBlock && codeBlockLines.length > 0) {
-    paragraphs.push([
-      {
-        tag: 'code_block',
-        language: codeBlockLang || 'PLAIN',
-        text: codeBlockLines.join('\n'),
-      },
-    ]);
-  }
-
-  return {
-    post: {
-      zh_cn: {
-        title: '',
-        content: paragraphs,
-      },
-    },
-  };
-}
 
 export class FeishuChannel implements Channel {
   name = 'feishu';
@@ -853,9 +683,10 @@ export class FeishuChannel implements Channel {
       // Send text portion
       if (cleanText) {
         const isVerbose = cleanText.startsWith('▎');
-        if (!isVerbose && hasMarkdown(cleanText)) {
-          // Try interactive card (JSON 2.0) for native markdown rendering (headings, tables, etc.)
-          // Fall back to post format, then plain text
+        if (!isVerbose) {
+          // Always use interactive card (JSON 2.0) for non-verbose messages
+          // Card renderer handles both markdown and plain text gracefully
+          // Fall back to plain text
           try {
             const cardContent = JSON.stringify({
               schema: '2.0',
@@ -877,41 +708,20 @@ export class FeishuChannel implements Channel {
           } catch (cardErr) {
             logger.warn(
               { chatId, err: cardErr },
-              'Feishu card message failed, falling back to post format',
+              'Feishu card message failed, falling back to plain text',
             );
-            try {
-              const postContent = markdownToPost(cleanText);
+            const chunks = this.splitText(cleanText);
+            for (const chunk of chunks) {
               const resp = await this.client.im.message.create({
                 params: { receive_id_type: 'chat_id' },
                 data: {
                   receive_id: chatId,
-                  msg_type: 'post',
-                  content: JSON.stringify({
-                    zh_cn: postContent.post.zh_cn,
-                  }),
+                  msg_type: 'text',
+                  content: JSON.stringify({ text: chunk }),
                 },
               });
               if (!firstMessageId && resp?.data?.message_id) {
                 firstMessageId = resp.data.message_id;
-              }
-            } catch (postErr) {
-              logger.warn(
-                { chatId, err: postErr },
-                'Feishu post message failed, falling back to plain text',
-              );
-              const chunks = this.splitText(cleanText);
-              for (const chunk of chunks) {
-                const resp = await this.client.im.message.create({
-                  params: { receive_id_type: 'chat_id' },
-                  data: {
-                    receive_id: chatId,
-                    msg_type: 'text',
-                    content: JSON.stringify({ text: chunk }),
-                  },
-                });
-                if (!firstMessageId && resp?.data?.message_id) {
-                  firstMessageId = resp.data.message_id;
-                }
               }
             }
           }

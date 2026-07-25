@@ -202,7 +202,11 @@ async function runTask(
           // the last messageId sent to this chat (captured by the IPC path)
           const isReminder = isReminderTask(task);
           logger.info(
-            { taskId: task.id, isReminder, promptPrefix: task.prompt.slice(0, 50) },
+            {
+              taskId: task.id,
+              isReminder,
+              promptPrefix: task.prompt.slice(0, 50),
+            },
             'Task success — checking reminder status',
           );
           if (isReminder) {
@@ -264,12 +268,7 @@ async function runTask(
   // Auto-complete interval tasks with scripts when the script returns wakeAgent=false.
   // A null result on a scripted task means the script's condition was met (e.g. user
   // reacted DONE on a reminder). No point checking again — the task is done.
-  if (
-    task.script &&
-    task.schedule_type === 'interval' &&
-    !error &&
-    !result
-  ) {
+  if (task.script && task.schedule_type === 'interval' && !error && !result) {
     logger.info(
       { taskId: task.id },
       'Auto-completing interval task: script condition met (wakeAgent=false)',
@@ -341,7 +340,12 @@ function scheduleReminderRecheck(
   });
 
   logger.info(
-    { taskId, originalTask: task.id, messageId, recheckAt: recheckTime.toISOString() },
+    {
+      taskId,
+      originalTask: task.id,
+      messageId,
+      recheckAt: recheckTime.toISOString(),
+    },
     'Auto-scheduled reminder re-check task',
   );
 }
@@ -360,7 +364,10 @@ async function handleReminderRecheck(
   // Extract messageId from prompt (Feishu IDs: om_xxx, but be permissive)
   const msgMatch = task.prompt.match(/messageId=(\S+?)(?:\s|\||$)/);
   if (!msgMatch) {
-    logger.error({ taskId: task.id, prompt: task.prompt.slice(0, 200) }, 'Re-check task missing messageId in prompt');
+    logger.error(
+      { taskId: task.id, prompt: task.prompt.slice(0, 200) },
+      'Re-check task missing messageId in prompt',
+    );
     updateTaskAfterRun(task.id, null, 'Error: missing messageId');
     return;
   }
@@ -371,7 +378,10 @@ async function handleReminderRecheck(
   const recheckCount = countMatch ? parseInt(countMatch[1], 10) : 1;
   const MAX_RECHECKS = 3;
   if (recheckCount > MAX_RECHECKS) {
-    logger.info({ taskId: task.id, recheckCount, messageId }, 'Max re-checks reached, stopping');
+    logger.info(
+      { taskId: task.id, recheckCount, messageId },
+      'Max re-checks reached, stopping',
+    );
     logTaskRun({
       task_id: task.id,
       run_at: new Date().toISOString(),
@@ -380,7 +390,11 @@ async function handleReminderRecheck(
       result: `Stopped after ${recheckCount} re-checks`,
       error: null,
     });
-    updateTaskAfterRun(task.id, null, `Stopped: max re-checks (${MAX_RECHECKS}) reached`);
+    updateTaskAfterRun(
+      task.id,
+      null,
+      `Stopped: max re-checks (${MAX_RECHECKS}) reached`,
+    );
     return;
   }
 
@@ -409,7 +423,9 @@ async function handleReminderRecheck(
       try {
         const result = JSON.parse(lastLine);
         if (typeof result.wakeAgent === 'boolean') wakeAgent = result.wakeAgent;
-      } catch { /* not JSON, assume wakeAgent=true */ }
+      } catch {
+        /* not JSON, assume wakeAgent=true */
+      }
     }
   } catch {
     // Script error (e.g. exit non-zero) — assume not acknowledged
@@ -418,7 +434,10 @@ async function handleReminderRecheck(
 
   if (!wakeAgent) {
     // User reacted DONE — we're done
-    logger.info({ taskId: task.id, messageId }, 'Reminder acknowledged (DONE reaction found)');
+    logger.info(
+      { taskId: task.id, messageId },
+      'Reminder acknowledged (DONE reaction found)',
+    );
     logTaskRun({
       task_id: task.id,
       run_at: new Date().toISOString(),
@@ -432,9 +451,15 @@ async function handleReminderRecheck(
   }
 
   // Not acknowledged — send nudge directly from host
-  logger.info({ taskId: task.id, messageId }, 'Reminder not acknowledged, sending nudge');
+  logger.info(
+    { taskId: task.id, messageId },
+    'Reminder not acknowledged, sending nudge',
+  );
   try {
-    await deps.sendMessage(task.chat_jid, '⏰ 还没完成哦！请在提醒消息上点 ✅ DONE');
+    await deps.sendMessage(
+      task.chat_jid,
+      '⏰ 还没完成哦！请在提醒消息上点 ✅ DONE',
+    );
   } catch (err) {
     logger.warn({ taskId: task.id, err }, 'Failed to send reminder nudge');
   }
