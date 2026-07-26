@@ -16,4 +16,7 @@ import './wecom.js';
 
 // telegram
 
+// web
+import './web.js';
+
 // whatsapp

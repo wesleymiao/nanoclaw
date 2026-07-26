@@ -114,6 +114,22 @@ vi.mock('./mount-security.js', () => ({
   validateAdditionalMounts: vi.fn(() => []),
 }));
 
+// Supplies WEB_USERS so bootstrapApp()'s channel loop actually connects a
+// real WebChannel for WebChannelDriver to drive (see E2EDriver above).
+// Every OTHER channel's env keys (FEISHU_*, SLACK_*, WECOM_*, ...) resolve
+// to '' here regardless of this machine's real .env, keeping those channels
+// deterministically unconfigured (factories return null) exactly as they
+// were before this mock existed (no .env file in a fresh checkout).
+vi.mock('./env.js', () => ({
+  readEnvFile: vi.fn((keys: string[]) => {
+    const env: Record<string, string> = {
+      WEB_USERS: 'e2e-user:e2e-pass',
+      WEB_PORT: '0', // random port — WebChannelDriver never opens a real socket to it
+    };
+    return Object.fromEntries(keys.map((k) => [k, env[k] || '']));
+  }),
+}));
+
 vi.mock('./container-runtime.js', () => ({
   CONTAINER_RUNTIME_BIN: 'docker',
   hostGatewayArgs: () => [],
@@ -410,7 +426,6 @@ import {
   ScheduledTask,
 } from './types.js';
 
-const TEST_JID = 'e2e-main@test';
 const TEST_GROUP = {
   name: 'E2E Main',
   folder: 'e2e-main',
@@ -419,8 +434,6 @@ const TEST_GROUP = {
   isMain: true, // sidesteps trigger-matching so the test focuses on the orchestrator itself
 };
 
-let sentMessages: { jid: string; text: string }[];
-let capturedOnMessage: OnInboundMessage | undefined;
 let narratedHeaderThisTest = false;
 // Buffered, not printed immediately: Vitest's reporters print a
 // "stdout | <test name>" header before *every single* console.log call
@@ -473,28 +486,103 @@ function flushNarration(): void {
   narrationBuffer = [];
 }
 
-function registerFakeChannel(): void {
-  sentMessages = [];
-  capturedOnMessage = undefined;
-  narratedHeaderThisTest = false;
-  narrationBuffer = [];
-  const factory = (opts: ChannelOpts): Channel => {
-    capturedOnMessage = opts.onMessage;
-    return {
-      name: 'e2e-test-channel',
-      connect: async () => {},
-      sendMessage: async (jid: string, text: string) => {
-        sentMessages.push({ jid, text });
-        narrateReply(text);
-        return `sent-${sentMessages.length}`;
-      },
-      isConnected: () => true,
-      ownsJid: () => true,
-      disconnect: async () => {},
-    };
-  };
-  registerChannel('e2e-test-channel', factory);
+/**
+ * Drives every scenario below through a specific inbound channel. Every
+ * scenario `describe`/`it` block runs once per driver (see the
+ * `describe.each(DRIVERS)` wrapper below) so the exact same conversation
+ * script is exercised both the "generic fake Channel" way (today's
+ * coverage) and through the REAL WebChannel's own login/registration/
+ * message-dispatch code (higher fidelity — Web is code NanoClaw owns).
+ * `jid` is fixed for the lifetime of one test so TEST_GROUP can be
+ * pre-registered under it in bootstrap() below, keeping `group_folder`
+ * ('e2e-main') and every session/task assertion identical across drivers.
+ */
+interface E2EDriver {
+  readonly jid: string;
+  readonly sentMessages: { jid: string; text: string }[];
+  /** Wires this driver up to the real channel instance(s) bootstrapApp() created. */
+  attach(app: { channels: Channel[] }): void;
+  /** Delivers one inbound message exactly as this driver's real channel would. */
+  dispatch(message: NewMessage): void;
 }
+
+/** Drives scenarios through a minimal test-only Channel (today's existing coverage). */
+class FakeChannelDriver implements E2EDriver {
+  readonly jid = 'e2e-main@test';
+  sentMessages: { jid: string; text: string }[] = [];
+  private onMessage: OnInboundMessage | undefined;
+
+  constructor() {
+    const factory = (opts: ChannelOpts): Channel => {
+      this.onMessage = opts.onMessage;
+      return {
+        name: 'e2e-test-channel',
+        connect: async () => {},
+        sendMessage: async (jid: string, text: string) => {
+          this.sentMessages.push({ jid, text });
+          narrateReply(text);
+          return `sent-${this.sentMessages.length}`;
+        },
+        isConnected: () => true,
+        ownsJid: () => true,
+        disconnect: async () => {},
+      };
+    };
+    registerChannel('e2e-test-channel', factory);
+  }
+
+  attach(): void {
+    // No-op: the fake channel captures onMessage via its own factory above,
+    // independent of bootstrapApp()'s returned channels array.
+  }
+
+  dispatch(message: NewMessage): void {
+    this.onMessage!(this.jid, message);
+  }
+}
+
+/**
+ * Drives scenarios through the REAL WebChannel — the same code the orchestrator
+ * connects in production, minus the actual HTTP/socket layer (already covered
+ * separately by web.test.ts). Delivers messages via WebChannel's real
+ * ingestMessage()/auto-register path (through `_ingestRawMessage`, its
+ * test-only pass-through), and observes real replies via `sendMessage()`'s
+ * real SSE-push/outgoing-buffer logic (through `_attachTestSubscriber`, its
+ * test-only fake-subscriber hook) — see web.ts for both.
+ */
+class WebChannelDriver implements E2EDriver {
+  readonly jid = 'web:e2e-user:main';
+  sentMessages: { jid: string; text: string }[] = [];
+  private channel: any;
+
+  attach(app: { channels: Channel[] }): void {
+    this.channel = app.channels.find((c) => c.name === 'web');
+    if (!this.channel) {
+      throw new Error(
+        'WebChannelDriver: bootstrapApp() did not connect a "web" channel — ' +
+          'is WEB_USERS mocked in this file\'s ./env.js mock?',
+      );
+    }
+    this.channel._attachTestSubscriber('e2e-user', {
+      write: (chunk: string) => {
+        const line = chunk.trim();
+        if (!line.startsWith('data:')) return; // skip the ": connected" SSE comment
+        const evt = JSON.parse(line.slice('data:'.length));
+        this.sentMessages.push({ jid: evt.jid, text: evt.text });
+        narrateReply(evt.text);
+      },
+    });
+  }
+
+  dispatch(message: NewMessage): void {
+    this.channel._ingestRawMessage(this.jid, message);
+  }
+}
+
+const DRIVERS: [string, () => E2EDriver][] = [
+  ['fake channel', () => new FakeChannelDriver()],
+  ['web channel', () => new WebChannelDriver()],
+];
 
 function inboundMessage(
   overrides: Partial<NewMessage> & { content: string },
@@ -502,7 +590,7 @@ function inboundMessage(
   narrateUser(overrides.content);
   return {
     id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-    chat_jid: TEST_JID,
+    chat_jid: driver.jid,
     sender: 'user@test',
     sender_name: 'Test User',
     timestamp: new Date().toISOString(),
@@ -521,12 +609,13 @@ function inboundMessage(
  */
 async function bootstrap() {
   const app = await bootstrapApp();
+  driver.attach(app);
   // bootstrapApp() -> loadState() reads registered groups from the (fresh,
   // empty) SQLite db, overwriting whatever _setRegisteredGroups() put in the
   // in-memory map beforehand -- so the test group must be (re-)installed
   // *after* bootstrapApp() resolves, not before.
-  _setRegisteredGroups({ [TEST_JID]: TEST_GROUP });
-  storeChatMetadata(TEST_JID, new Date().toISOString(), TEST_GROUP.name);
+  _setRegisteredGroups({ [driver.jid]: TEST_GROUP });
+  storeChatMetadata(driver.jid, new Date().toISOString(), TEST_GROUP.name);
   return app;
 }
 
@@ -537,16 +626,23 @@ function nextTimestamp(): string {
   return new Date(Date.now() + advanceCounter).toISOString();
 }
 
+let driver: E2EDriver;
+
+// Every scenario below runs once per driver — see the E2EDriver design
+// comment above DRIVERS' declaration.
+describe.each(DRIVERS)('%s driver', (_label, createDriver) => {
 beforeEach(() => {
   vi.useFakeTimers();
   fs.rmSync(paths.root, { recursive: true, force: true });
   fs.mkdirSync(paths.root, { recursive: true });
   spawnedProcs = [];
   advanceCounter = 0;
+  narratedHeaderThisTest = false;
+  narrationBuffer = [];
   _resetAppStateForTesting();
   _resetSchedulerLoopForTests();
   _resetIpcWatcherForTesting();
-  registerFakeChannel();
+  driver = createDriver();
 });
 
 afterEach(() => {
@@ -562,8 +658,7 @@ describe('Tier 0 · E2E — full conversation through the real orchestrator', ()
     // Real: bootstrapApp()'s wiring, processGroupMessages/runAgent, GroupQueue, SQLite.
     await bootstrap();
 
-    capturedOnMessage!(
-      TEST_JID,
+    driver.dispatch(
       inboundMessage({ content: 'hello', timestamp: nextTimestamp() }),
     );
 
@@ -585,8 +680,8 @@ describe('Tier 0 · E2E — full conversation through the real orchestrator', ()
     await vi.advanceTimersByTimeAsync(10);
 
     expect(getSession('e2e-main')).toBe('session-turn-1');
-    expect(sentMessages).toEqual([
-      { jid: TEST_JID, text: 'Hello! How can I help?' },
+    expect(driver.sentMessages).toEqual([
+      { jid: driver.jid, text: 'Hello! How can I help?' },
     ]);
   });
 
@@ -597,8 +692,7 @@ describe('Tier 0 · E2E — full conversation through the real orchestrator', ()
     // GroupQueue's active/idle bookkeeping, and the message loop's re-spawn decision.
     await bootstrap();
 
-    capturedOnMessage!(
-      TEST_JID,
+    driver.dispatch(
       inboundMessage({ content: 'turn one', timestamp: nextTimestamp() }),
     );
     await vi.advanceTimersByTimeAsync(2000);
@@ -617,8 +711,7 @@ describe('Tier 0 · E2E — full conversation through the real orchestrator', ()
     spawnedProcs[0].emit('close', 0);
     await vi.advanceTimersByTimeAsync(10);
 
-    capturedOnMessage!(
-      TEST_JID,
+    driver.dispatch(
       inboundMessage({ content: 'turn two', timestamp: nextTimestamp() }),
     );
     await vi.advanceTimersByTimeAsync(2000);
@@ -636,7 +729,7 @@ describe('Tier 0 · E2E — full conversation through the real orchestrator', ()
     spawnedProcs[1].emit('close', 0);
     await vi.advanceTimersByTimeAsync(10);
 
-    expect(sentMessages.map((m) => m.text)).toEqual(['reply one', 'reply two']);
+    expect(driver.sentMessages.map((m) => m.text)).toEqual(['reply one', 'reply two']);
     expect(getSession('e2e-main')).toBe('session-abc');
   });
 
@@ -648,8 +741,7 @@ describe('Tier 0 · E2E — full conversation through the real orchestrator', ()
     // exact code path that had 0% coverage before this file existed.
     await bootstrap();
 
-    capturedOnMessage!(
-      TEST_JID,
+    driver.dispatch(
       inboundMessage({ content: 'do the thing', timestamp: nextTimestamp() }),
     );
     await vi.advanceTimersByTimeAsync(2000);
@@ -657,7 +749,7 @@ describe('Tier 0 · E2E — full conversation through the real orchestrator', ()
 
     // Simulate the real agent-runner's verbose-message channel: a JSON file
     // written into the group's IPC messages directory mid-run.
-    emitVerboseMessage(TEST_JID, 'e2e-main', 'Running a tool…');
+    emitVerboseMessage(driver.jid, 'e2e-main', 'Running a tool…');
 
     emitOutputMarker(spawnedProcs[0], {
       status: 'success',
@@ -668,7 +760,7 @@ describe('Tier 0 · E2E — full conversation through the real orchestrator', ()
     spawnedProcs[0].emit('close', 0);
     await vi.advanceTimersByTimeAsync(10);
 
-    expect(sentMessages.map((m) => m.text)).toEqual([
+    expect(driver.sentMessages.map((m) => m.text)).toEqual([
       '▎Running a tool…',
       'done!',
     ]);
@@ -678,8 +770,7 @@ describe('Tier 0 · E2E — full conversation through the real orchestrator', ()
     // Faked: Docker, chat channel. Real: bootstrapApp().shutdown() / GroupQueue.shutdown().
     const app = await bootstrap();
 
-    capturedOnMessage!(
-      TEST_JID,
+    driver.dispatch(
       inboundMessage({ content: 'long task', timestamp: nextTimestamp() }),
     );
     await vi.advanceTimersByTimeAsync(2000);
@@ -719,8 +810,7 @@ describe('Conversation scripts — realistic agent task scenarios', () => {
   it('plain Q&A, no tools: "What\'s 2+2?" goes straight to the final marker with zero verbose events', async () => {
     await bootstrap();
 
-    capturedOnMessage!(
-      TEST_JID,
+    driver.dispatch(
       inboundMessage({ content: "What's 2+2?", timestamp: nextTimestamp() }),
     );
     await vi.advanceTimersByTimeAsync(2000);
@@ -736,14 +826,13 @@ describe('Conversation scripts — realistic agent task scenarios', () => {
     spawnedProcs[0].emit('close', 0);
     await vi.advanceTimersByTimeAsync(10);
 
-    expect(sentMessages.map((m) => m.text)).toEqual(["It's 4."]);
+    expect(driver.sentMessages.map((m) => m.text)).toEqual(["It's 4."]);
   });
 
   it('single read-only lookup: "What\'s in my README?" relays one Read notification before the final answer', async () => {
     await bootstrap();
 
-    capturedOnMessage!(
-      TEST_JID,
+    driver.dispatch(
       inboundMessage({
         content: "What's in my README?",
         timestamp: nextTimestamp(),
@@ -752,7 +841,7 @@ describe('Conversation scripts — realistic agent task scenarios', () => {
     await vi.advanceTimersByTimeAsync(2000);
     expect(spawnedProcs).toHaveLength(1);
 
-    emitVerboseMessage(TEST_JID, 'e2e-main', '📄 Read: README.md');
+    emitVerboseMessage(driver.jid, 'e2e-main', '📄 Read: README.md');
     emitOutputMarker(spawnedProcs[0], {
       status: 'success',
       result: 'Your README describes NanoClaw, a personal Claude assistant.',
@@ -762,7 +851,7 @@ describe('Conversation scripts — realistic agent task scenarios', () => {
     spawnedProcs[0].emit('close', 0);
     await vi.advanceTimersByTimeAsync(10);
 
-    expect(sentMessages.map((m) => m.text)).toEqual([
+    expect(driver.sentMessages.map((m) => m.text)).toEqual([
       '▎📄 Read: README.md',
       'Your README describes NanoClaw, a personal Claude assistant.',
     ]);
@@ -771,8 +860,7 @@ describe('Conversation scripts — realistic agent task scenarios', () => {
   it('multi-step edit-and-verify: "Fix the typo in config.ts and run the tests" relays three tool notifications in strict order, with a correctly formatted+capped Edit diff preview', async () => {
     await bootstrap();
 
-    capturedOnMessage!(
-      TEST_JID,
+    driver.dispatch(
       inboundMessage({
         content: 'Fix the typo in config.ts and run the tests',
         timestamp: nextTimestamp(),
@@ -787,12 +875,12 @@ describe('Conversation scripts — realistic agent task scenarios', () => {
     //   🔧 Bash: npm test
     //   final marker: "Fixed the typo, tests pass."
     emitVerboseMessage(
-      TEST_JID,
+      driver.jid,
       'e2e-main',
       agentRunnerFormat.bash('npm run lint'),
     );
     emitVerboseMessage(
-      TEST_JID,
+      driver.jid,
       'e2e-main',
       agentRunnerFormat.editDiff(
         'src/config.ts',
@@ -801,7 +889,7 @@ describe('Conversation scripts — realistic agent task scenarios', () => {
       ),
     );
     emitVerboseMessage(
-      TEST_JID,
+      driver.jid,
       'e2e-main',
       agentRunnerFormat.bash('npm test'),
     );
@@ -815,7 +903,7 @@ describe('Conversation scripts — realistic agent task scenarios', () => {
     await vi.advanceTimersByTimeAsync(10);
 
     // Strict chronological order: lint -> edit (with capped diff preview) -> test -> final answer.
-    expect(sentMessages.map((m) => m.text)).toEqual([
+    expect(driver.sentMessages.map((m) => m.text)).toEqual([
       '▎🔧 Bash: npm run lint',
       "▎✏️ Edit: src/config.ts (+1 -1)\n▎- const asssistantName = 'Andy';\n▎+ const assistantName = 'Andy';",
       '▎🔧 Bash: npm test',
@@ -831,8 +919,7 @@ describe('Conversation scripts — realistic agent task scenarios', () => {
     // to send one, with the exact format agent-runner would use.
     await bootstrap();
 
-    capturedOnMessage!(
-      TEST_JID,
+    driver.dispatch(
       inboundMessage({
         content: 'Search the web for the latest Node LTS version and summarize',
         timestamp: nextTimestamp(),
@@ -842,12 +929,12 @@ describe('Conversation scripts — realistic agent task scenarios', () => {
     expect(spawnedProcs).toHaveLength(1);
 
     emitVerboseMessage(
-      TEST_JID,
+      driver.jid,
       'e2e-main',
       agentRunnerFormat.webSearch('node lts version'),
     );
     emitVerboseMessage(
-      TEST_JID,
+      driver.jid,
       'e2e-main',
       agentRunnerFormat.progressPing('WebSearch', 7),
     );
@@ -860,7 +947,7 @@ describe('Conversation scripts — realistic agent task scenarios', () => {
     spawnedProcs[0].emit('close', 0);
     await vi.advanceTimersByTimeAsync(10);
 
-    expect(sentMessages.map((m) => m.text)).toEqual([
+    expect(driver.sentMessages.map((m) => m.text)).toEqual([
       '▎🌐 WebSearch: node lts version',
       '▎⏳ WebSearch: still running (7s)',
       'Node 22 is the current LTS release.',
@@ -877,8 +964,7 @@ describe('Conversation scripts — realistic agent task scenarios', () => {
     // catalog row), not agent-runner's internal buffering code itself.
     await bootstrap();
 
-    capturedOnMessage!(
-      TEST_JID,
+    driver.dispatch(
       inboundMessage({
         content: 'Should I use Postgres or SQLite here?',
         timestamp: nextTimestamp(),
@@ -898,7 +984,7 @@ describe('Conversation scripts — realistic agent task scenarios', () => {
     spawnedProcs[0].emit('close', 0);
     await vi.advanceTimersByTimeAsync(10);
 
-    expect(sentMessages.map((m) => m.text)).toEqual([
+    expect(driver.sentMessages.map((m) => m.text)).toEqual([
       'SQLite — no server to run, and your load is single-writer.',
     ]);
   });
@@ -906,8 +992,7 @@ describe('Conversation scripts — realistic agent task scenarios', () => {
   it('reasoning that leads into a tool call: same question, but the agent checks something first — the buffered reasoning is flushed as 💭 before the tool notification', async () => {
     await bootstrap();
 
-    capturedOnMessage!(
-      TEST_JID,
+    driver.dispatch(
       inboundMessage({
         content: 'Should I use Postgres or SQLite here?',
         timestamp: nextTimestamp(),
@@ -920,14 +1005,14 @@ describe('Conversation scripts — realistic agent task scenarios', () => {
     // assistant turn, so agent-runner flushes it immediately instead of
     // buffering-then-dropping it (the opposite branch from the test above).
     emitVerboseMessage(
-      TEST_JID,
+      driver.jid,
       'e2e-main',
       agentRunnerFormat.thinking(
         'Let me check what package.json already depends on.',
       ),
     );
     emitVerboseMessage(
-      TEST_JID,
+      driver.jid,
       'e2e-main',
       agentRunnerFormat.read('package.json'),
     );
@@ -941,7 +1026,7 @@ describe('Conversation scripts — realistic agent task scenarios', () => {
     spawnedProcs[0].emit('close', 0);
     await vi.advanceTimersByTimeAsync(10);
 
-    expect(sentMessages.map((m) => m.text)).toEqual([
+    expect(driver.sentMessages.map((m) => m.text)).toEqual([
       '▎💭 Let me check what package.json already depends on.',
       '▎📄 Read: package.json',
       'You already depend on better-sqlite3, so SQLite is the simpler fit.',
@@ -951,8 +1036,7 @@ describe('Conversation scripts — realistic agent task scenarios', () => {
   it('live checklist progress: "Plan out and complete a 3-step refactor" relays every TodoWrite update, not just first/last, so progress is visibly live', async () => {
     await bootstrap();
 
-    capturedOnMessage!(
-      TEST_JID,
+    driver.dispatch(
       inboundMessage({
         content: 'Plan out and complete a 3-step refactor',
         timestamp: nextTimestamp(),
@@ -968,22 +1052,22 @@ describe('Conversation scripts — realistic agent task scenarios', () => {
       );
 
     emitVerboseMessage(
-      TEST_JID,
+      driver.jid,
       'e2e-main',
       checklist(['pending', 'pending', 'pending']),
     );
     emitVerboseMessage(
-      TEST_JID,
+      driver.jid,
       'e2e-main',
       checklist(['in_progress', 'pending', 'pending']),
     );
     emitVerboseMessage(
-      TEST_JID,
+      driver.jid,
       'e2e-main',
       checklist(['completed', 'in_progress', 'pending']),
     );
     emitVerboseMessage(
-      TEST_JID,
+      driver.jid,
       'e2e-main',
       checklist(['completed', 'completed', 'completed']),
     );
@@ -997,7 +1081,7 @@ describe('Conversation scripts — realistic agent task scenarios', () => {
     await vi.advanceTimersByTimeAsync(10);
 
     // All four intermediate states are relayed — not deduped to first/last.
-    expect(sentMessages.map((m) => m.text)).toEqual([
+    expect(driver.sentMessages.map((m) => m.text)).toEqual([
       '▎🔨 TodoWrite: ⬜ Extract helper | ⬜ Update callers | ⬜ Remove dead code',
       '▎🔨 TodoWrite: 🔄 Extract helper | ⬜ Update callers | ⬜ Remove dead code',
       '▎🔨 TodoWrite: ✅ Extract helper | 🔄 Update callers | ⬜ Remove dead code',
@@ -1009,8 +1093,7 @@ describe('Conversation scripts — realistic agent task scenarios', () => {
   it('sub-agent delegation: "Delegate the research half of this to a sub-agent" relays the Agent notification and its nested tool call together', async () => {
     await bootstrap();
 
-    capturedOnMessage!(
-      TEST_JID,
+    driver.dispatch(
       inboundMessage({
         content: 'Delegate the research half of this to a sub-agent',
         timestamp: nextTimestamp(),
@@ -1020,14 +1103,14 @@ describe('Conversation scripts — realistic agent task scenarios', () => {
     expect(spawnedProcs).toHaveLength(1);
 
     emitVerboseMessage(
-      TEST_JID,
+      driver.jid,
       'e2e-main',
       agentRunnerFormat.agentDelegate('research competing libraries'),
     );
     // Nested tool call performed by the sub-agent — relayed the same way as
     // any other tool notification, just occurring after the Agent dispatch.
     emitVerboseMessage(
-      TEST_JID,
+      driver.jid,
       'e2e-main',
       agentRunnerFormat.webSearch('best sqlite orm 2026'),
     );
@@ -1040,7 +1123,7 @@ describe('Conversation scripts — realistic agent task scenarios', () => {
     spawnedProcs[0].emit('close', 0);
     await vi.advanceTimersByTimeAsync(10);
 
-    expect(sentMessages.map((m) => m.text)).toEqual([
+    expect(driver.sentMessages.map((m) => m.text)).toEqual([
       '▎🤖 Agent: research competing libraries',
       '▎🌐 WebSearch: best sqlite orm 2026',
       'Sub-agent recommends Drizzle for this use case.',
@@ -1050,8 +1133,7 @@ describe('Conversation scripts — realistic agent task scenarios', () => {
   it('MCP tool call: "Check my calendar availability for tomorrow" strips the mcp__ prefix and renders params as k=v', async () => {
     await bootstrap();
 
-    capturedOnMessage!(
-      TEST_JID,
+    driver.dispatch(
       inboundMessage({
         content: 'Check my calendar availability for tomorrow',
         timestamp: nextTimestamp(),
@@ -1061,7 +1143,7 @@ describe('Conversation scripts — realistic agent task scenarios', () => {
     expect(spawnedProcs).toHaveLength(1);
 
     emitVerboseMessage(
-      TEST_JID,
+      driver.jid,
       'e2e-main',
       agentRunnerFormat.mcpTool('mcp__calendar__check_availability', {
         date: '2026-07-27',
@@ -1076,7 +1158,7 @@ describe('Conversation scripts — realistic agent task scenarios', () => {
     spawnedProcs[0].emit('close', 0);
     await vi.advanceTimersByTimeAsync(10);
 
-    expect(sentMessages.map((m) => m.text)).toEqual([
+    expect(driver.sentMessages.map((m) => m.text)).toEqual([
       '▎🔨 check_availability: date=2026-07-27',
       "You're free all day tomorrow.",
     ]);
@@ -1093,8 +1175,7 @@ describe('Conversation scripts — realistic agent task scenarios', () => {
     // watcher polls all groups' IPC directories on its own schedule.
     await bootstrap();
 
-    capturedOnMessage!(
-      TEST_JID,
+    driver.dispatch(
       inboundMessage({
         content: 'run the full build',
         timestamp: nextTimestamp(),
@@ -1104,7 +1185,7 @@ describe('Conversation scripts — realistic agent task scenarios', () => {
     expect(spawnedProcs).toHaveLength(1);
 
     emitVerboseMessage(
-      TEST_JID,
+      driver.jid,
       'e2e-main',
       agentRunnerFormat.bash('long-running-build.sh'),
     );
@@ -1112,7 +1193,7 @@ describe('Conversation scripts — realistic agent task scenarios', () => {
     // container ever times out (mirrors what a real long task looks like:
     // the trail arrives progressively, well before the eventual timeout).
     await vi.advanceTimersByTimeAsync(5000);
-    expect(sentMessages.map((m) => m.text)).toEqual([
+    expect(driver.sentMessages.map((m) => m.text)).toEqual([
       '▎🔧 Bash: long-running-build.sh',
     ]);
 
@@ -1127,7 +1208,7 @@ describe('Conversation scripts — realistic agent task scenarios', () => {
 
     // No final answer was ever sent — only the verbose trail that already
     // went out before the timeout.
-    expect(sentMessages.map((m) => m.text)).toEqual([
+    expect(driver.sentMessages.map((m) => m.text)).toEqual([
       '▎🔧 Bash: long-running-build.sh',
     ]);
   });
@@ -1135,8 +1216,7 @@ describe('Conversation scripts — realistic agent task scenarios', () => {
   it('multi-prompt run, two results in one container: onOutput fires for every marker found in the stream, not just the first (NOTE: despite the doc catalog calling this "scheduled task", it is driven by a normal user message here — see the "Scheduled tasks" describe block below for tests that go through the real task-scheduler.ts)', async () => {
     await bootstrap();
 
-    capturedOnMessage!(
-      TEST_JID,
+    driver.dispatch(
       inboundMessage({
         content: 'run the nightly digest',
         timestamp: nextTimestamp(),
@@ -1146,7 +1226,7 @@ describe('Conversation scripts — realistic agent task scenarios', () => {
     expect(spawnedProcs).toHaveLength(1);
 
     emitVerboseMessage(
-      TEST_JID,
+      driver.jid,
       'e2e-main',
       agentRunnerFormat.read('digest-sources.json'),
     );
@@ -1158,7 +1238,7 @@ describe('Conversation scripts — realistic agent task scenarios', () => {
     await vi.advanceTimersByTimeAsync(10);
 
     emitVerboseMessage(
-      TEST_JID,
+      driver.jid,
       'e2e-main',
       agentRunnerFormat.bash('render digest.html'),
     );
@@ -1174,7 +1254,7 @@ describe('Conversation scripts — realistic agent task scenarios', () => {
     // Only one docker run for the whole scheduled invocation, but both
     // markers were relayed as separate results, in order.
     expect(spawnedProcs).toHaveLength(1);
-    expect(sentMessages.map((m) => m.text)).toEqual([
+    expect(driver.sentMessages.map((m) => m.text)).toEqual([
       '▎📄 Read: digest-sources.json',
       'Prompt 1 done: fetched sources.',
       '▎🔧 Bash: render digest.html',
@@ -1194,8 +1274,7 @@ describe('Multi-turn conversations — several user messages, one continuous ses
   it('two-turn follow-up: "What\'s the weather in Tokyo?" then "What about tomorrow?" — same session ID both times, no extra teardown', async () => {
     await bootstrap();
 
-    capturedOnMessage!(
-      TEST_JID,
+    driver.dispatch(
       inboundMessage({
         content: "What's the weather in Tokyo?",
         timestamp: nextTimestamp(),
@@ -1215,8 +1294,7 @@ describe('Multi-turn conversations — several user messages, one continuous ses
     await vi.advanceTimersByTimeAsync(10);
 
     // Second turn, well inside the idle window — same conversation, not a resume.
-    capturedOnMessage!(
-      TEST_JID,
+    driver.dispatch(
       inboundMessage({
         content: 'What about tomorrow?',
         timestamp: nextTimestamp(),
@@ -1238,7 +1316,7 @@ describe('Multi-turn conversations — several user messages, one continuous ses
     await vi.advanceTimersByTimeAsync(10);
 
     expect(getSession('e2e-main')).toBe('session-weather');
-    expect(sentMessages.map((m) => m.text)).toEqual([
+    expect(driver.sentMessages.map((m) => m.text)).toEqual([
       "It's 24°C and sunny in Tokyo right now.",
       'Tomorrow in Tokyo: 22°C, light rain in the afternoon.',
     ]);
@@ -1247,8 +1325,7 @@ describe('Multi-turn conversations — several user messages, one continuous ses
   it('three-turn task refinement: user narrows down a request across three messages, each turn building on the last', async () => {
     await bootstrap();
 
-    capturedOnMessage!(
-      TEST_JID,
+    driver.dispatch(
       inboundMessage({
         content: 'Find me a good book to read',
         timestamp: nextTimestamp(),
@@ -1265,8 +1342,7 @@ describe('Multi-turn conversations — several user messages, one continuous ses
     spawnedProcs[0].emit('close', 0);
     await vi.advanceTimersByTimeAsync(10);
 
-    capturedOnMessage!(
-      TEST_JID,
+    driver.dispatch(
       inboundMessage({
         content: 'Sci-fi, something recent',
         timestamp: nextTimestamp(),
@@ -1276,7 +1352,7 @@ describe('Multi-turn conversations — several user messages, one continuous ses
     expect(spawnedProcs).toHaveLength(2);
     expect(stdinInputOf(spawnedProcs[1]).sessionId).toBe('session-book');
     emitVerboseMessage(
-      TEST_JID,
+      driver.jid,
       'e2e-main',
       agentRunnerFormat.webSearch('best sci-fi novels 2026'),
     );
@@ -1290,8 +1366,7 @@ describe('Multi-turn conversations — several user messages, one continuous ses
     spawnedProcs[1].emit('close', 0);
     await vi.advanceTimersByTimeAsync(10);
 
-    capturedOnMessage!(
-      TEST_JID,
+    driver.dispatch(
       inboundMessage({
         content: 'That sounds good, where can I buy it?',
         timestamp: nextTimestamp(),
@@ -1313,7 +1388,7 @@ describe('Multi-turn conversations — several user messages, one continuous ses
     // One continuous session across all three turns, and the full
     // conversation was relayed to the user in strict chronological order.
     expect(getSession('e2e-main')).toBe('session-book');
-    expect(sentMessages.map((m) => m.text)).toEqual([
+    expect(driver.sentMessages.map((m) => m.text)).toEqual([
       'Sure — any particular genre?',
       '▎🌐 WebSearch: best sci-fi novels 2026',
       'How about "The Tangled Stars" (2026) — space opera, well reviewed?',
@@ -1334,8 +1409,7 @@ describe('Scheduled tasks — creation via natural-language request, and real ex
   it('user asks for a recurring reminder: "Start sending me today\'s weather 9am every day" creates a cron task via the schedule_task IPC path, and the agent confirms it in chat', async () => {
     await bootstrap();
 
-    capturedOnMessage!(
-      TEST_JID,
+    driver.dispatch(
       inboundMessage({
         content: "Start sending me today's weather 9am every day",
         timestamp: nextTimestamp(),
@@ -1349,7 +1423,7 @@ describe('Scheduled tasks — creation via natural-language request, and real ex
     // container. We can't run the real MCP tool here (no real container),
     // so this line is the one faked step; everything downstream of it
     // (processTaskIpc, createTask, the DB row) is real.
-    emitScheduleTaskIpc(TEST_JID, 'e2e-main', {
+    emitScheduleTaskIpc(driver.jid, 'e2e-main', {
       taskId: 'task-daily-weather',
       prompt: "Send today's weather forecast",
       schedule_type: 'cron',
@@ -1374,7 +1448,7 @@ describe('Scheduled tasks — creation via natural-language request, and real ex
     expect(task).toMatchObject({
       id: 'task-daily-weather',
       group_folder: 'e2e-main',
-      chat_jid: TEST_JID,
+      chat_jid: driver.jid,
       prompt: "Send today's weather forecast",
       schedule_type: 'cron',
       schedule_value: '0 9 * * *',
@@ -1384,7 +1458,7 @@ describe('Scheduled tasks — creation via natural-language request, and real ex
     // this doesn't rot the day this test happens to run.
     expect(new Date(task!.next_run!).getTime()).toBeGreaterThan(Date.now());
 
-    expect(sentMessages.map((m) => m.text)).toEqual([
+    expect(driver.sentMessages.map((m) => m.text)).toEqual([
       "Done — I'll send you the weather every day at 9am.",
     ]);
   });
@@ -1399,7 +1473,7 @@ describe('Scheduled tasks — creation via natural-language request, and real ex
     const task: Omit<ScheduledTask, 'last_run' | 'last_result'> = {
       id: 'task-daily-weather',
       group_folder: 'e2e-main',
-      chat_jid: TEST_JID,
+      chat_jid: driver.jid,
       prompt: "Send today's weather forecast",
       script: null,
       is_reminder: false,
@@ -1412,7 +1486,7 @@ describe('Scheduled tasks — creation via natural-language request, and real ex
     };
     createTask(task);
 
-    // No capturedOnMessage(...) call anywhere in this test — the container
+    // No driver.dispatch(...) call anywhere in this test — the container
     // spawn below is driven entirely by startSchedulerLoop's own polling,
     // exactly like a real 9am firing would be, just sped up.
     await vi.advanceTimersByTimeAsync(60_000); // SCHEDULER_POLL_INTERVAL
@@ -1432,7 +1506,7 @@ describe('Scheduled tasks — creation via natural-language request, and real ex
     spawnedProcs[0].emit('close', 0);
     await vi.advanceTimersByTimeAsync(10);
 
-    expect(sentMessages.map((m) => m.text)).toEqual([
+    expect(driver.sentMessages.map((m) => m.text)).toEqual([
       "Today's forecast: 18°C, partly cloudy.",
     ]);
 
@@ -1450,3 +1524,4 @@ describe('Scheduled tasks — creation via natural-language request, and real ex
     expect(new Date(updated!.next_run!).getTime()).toBeGreaterThan(Date.now());
   });
 });
+}); // end describe.each(DRIVERS)
