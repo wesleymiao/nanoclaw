@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 
 import { DATA_DIR, MAX_CONCURRENT_CONTAINERS } from './config.js';
+import { groupKeyFromChatJid } from './group-key.js';
 import { logger } from './logger.js';
 
 interface QueuedTask {
@@ -35,8 +36,15 @@ export class GroupQueue {
     null;
   private shuttingDown = false;
 
+  /**
+   * Partition queue state by the explicit composite group key, not the raw
+   * chatJid string. Keeps the public API taking a plain groupJid (channels,
+   * index.ts, and task-scheduler.ts are unaffected) while the actual
+   * partitioning uses (channel_type, tenant_id, conversation_id) internally.
+   */
   private getGroup(groupJid: string): GroupState {
-    let state = this.groups.get(groupJid);
+    const key = groupKeyFromChatJid(groupJid);
+    let state = this.groups.get(key);
     if (!state) {
       state = {
         active: false,
@@ -50,7 +58,7 @@ export class GroupQueue {
         groupFolder: null,
         retryCount: 0,
       };
-      this.groups.set(groupJid, state);
+      this.groups.set(key, state);
     }
     return state;
   }

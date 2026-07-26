@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 
 import { ASSISTANT_NAME, DATA_DIR, STORE_DIR } from './config.js';
+import { parseGroupKey } from './group-key.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
 import {
@@ -172,6 +173,36 @@ function createSchema(database: Database.Database): void {
       `ALTER TABLE messages ADD COLUMN reply_to_message_content TEXT`,
     );
     database.exec(`ALTER TABLE messages ADD COLUMN reply_to_sender_name TEXT`);
+  } catch {
+    /* columns already exist */
+  }
+
+  // Add explicit composite group identity columns (channel_type, tenant_id,
+  // conversation_id) if they don't exist (migration for existing DBs).
+  // Backfilled from the existing `jid` column via parseGroupKey() so lookups
+  // can use the explicit composite key instead of implicit jid parsing.
+  try {
+    database.exec(
+      `ALTER TABLE registered_groups ADD COLUMN channel_type TEXT`,
+    );
+    database.exec(`ALTER TABLE registered_groups ADD COLUMN tenant_id TEXT`);
+    database.exec(
+      `ALTER TABLE registered_groups ADD COLUMN conversation_id TEXT`,
+    );
+    const rows = database
+      .prepare('SELECT jid FROM registered_groups')
+      .all() as Array<{ jid: string }>;
+    const backfill = database.prepare(
+      `UPDATE registered_groups SET channel_type = ?, tenant_id = ?, conversation_id = ? WHERE jid = ?`,
+    );
+    for (const { jid } of rows) {
+      const key = parseGroupKey(jid);
+      backfill.run(key.channelType, key.tenantId, key.conversationId, jid);
+    }
+    database.exec(
+      `CREATE INDEX IF NOT EXISTS idx_registered_groups_composite_key
+       ON registered_groups (channel_type, tenant_id, conversation_id)`,
+    );
   } catch {
     /* columns already exist */
   }
@@ -667,9 +698,12 @@ export function getAllSessions(): Record<string, string> {
 export function getRegisteredGroup(
   jid: string,
 ): (RegisteredGroup & { jid: string }) | undefined {
+  const key = parseGroupKey(jid);
   const row = db
-    .prepare('SELECT * FROM registered_groups WHERE jid = ?')
-    .get(jid) as
+    .prepare(
+      'SELECT * FROM registered_groups WHERE channel_type = ? AND tenant_id = ? AND conversation_id = ?',
+    )
+    .get(key.channelType, key.tenantId, key.conversationId) as
     | {
         jid: string;
         name: string;
@@ -710,9 +744,10 @@ export function setRegisteredGroup(jid: string, group: RegisteredGroup): void {
   if (!isValidGroupFolder(group.folder)) {
     throw new Error(`Invalid group folder "${group.folder}" for JID ${jid}`);
   }
+  const key = parseGroupKey(jid);
   db.prepare(
-    `INSERT OR REPLACE INTO registered_groups (jid, name, folder, trigger_pattern, added_at, container_config, requires_trigger, is_main, verbose)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT OR REPLACE INTO registered_groups (jid, name, folder, trigger_pattern, added_at, container_config, requires_trigger, is_main, verbose, channel_type, tenant_id, conversation_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     jid,
     group.name,
@@ -723,6 +758,9 @@ export function setRegisteredGroup(jid: string, group: RegisteredGroup): void {
     group.requiresTrigger === undefined ? 1 : group.requiresTrigger ? 1 : 0,
     group.isMain ? 1 : 0,
     group.verbose === false ? 0 : 1,
+    key.channelType,
+    key.tenantId,
+    key.conversationId,
   );
 }
 
