@@ -49,6 +49,9 @@ function makeOpts() {
     onMessage: vi.fn(),
     onChatMetadata: vi.fn(),
     registeredGroups: vi.fn(() => groups),
+    registerGroup: vi.fn((jid: string, group: any) => {
+      groups[jid] = group;
+    }),
   };
 }
 
@@ -280,6 +283,13 @@ describe('WebChannel', () => {
 
       expect(opts.registeredGroups()['web:alice:auto-conv']).toBeDefined();
       expect(opts.registeredGroups()['web:alice:auto-conv'].isMain).toBe(false);
+      // Regression check: registration must go through the persisted
+      // registerGroup() path (DB row + folder), not just an in-memory
+      // mutation, or the conversation is forgotten on restart.
+      expect(opts.registerGroup).toHaveBeenCalledWith(
+        'web:alice:auto-conv',
+        expect.objectContaining({ folder: 'web_alice_auto-conv' }),
+      );
     });
 
     it('rejects invalid conversationId format on /api/messages', async () => {

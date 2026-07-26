@@ -23,6 +23,7 @@ export interface WebChannelOpts {
   onMessage: OnInboundMessage;
   onChatMetadata: OnChatMetadata;
   registeredGroups: () => Record<string, RegisteredGroup>;
+  registerGroup: (jid: string, group: RegisteredGroup) => void;
 }
 
 interface Session {
@@ -520,16 +521,12 @@ export class WebChannel implements Channel {
       isMain: false,
     };
 
-    // registerGroup persistence (DB write + folder creation) is owned by
-    // index.ts's registerGroup(), reachable only via the registerGroup IPC
-    // dependency injected through ChannelOpts in the real orchestrator.
-    // Channels don't call db.ts's setRegisteredGroup()/mkdir directly for
-    // their OWN conversations the way Feishu does for discovered chats,
-    // because Feishu auto-registers chats it didn't create; Web's
-    // conversations are always explicitly created by an authenticated user
-    // through this channel, so the registration path is the same one
-    // index.ts itself uses.
-    groups[jid] = group;
+    // Persist via the real registerGroup() path (DB row + group folder +
+    // CLAUDE.md template + OneCLI agent) — the same one index.ts uses for
+    // IPC-driven registration — instead of only mutating the in-memory
+    // registeredGroups() map, which is rebuilt from the DB on every
+    // restart and would otherwise silently forget this conversation.
+    this.opts.registerGroup(jid, group);
     this.opts.onChatMetadata(
       jid,
       new Date().toISOString(),
