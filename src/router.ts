@@ -67,9 +67,7 @@ export function findChannel(
   jid: string,
 ): Channel | undefined {
   const { channelType } = parseGroupKey(jid);
-  const byType = channels.find(
-    (c) => c.name === channelType && c.ownsJid(jid),
-  );
+  const byType = channels.find((c) => c.name === channelType && c.ownsJid(jid));
   if (byType) return byType;
   return channels.find((c) => c.ownsJid(jid));
 }

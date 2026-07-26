@@ -62,7 +62,10 @@ export class WebChannel implements Channel {
   /** SSE subscribers, keyed by username (one multiplexed stream per login, covering all of that user's conversations). */
   private streams = new Map<string, Set<http.ServerResponse>>();
   /** Messages buffered per-username while no SSE stream is connected. */
-  private outgoingQueue = new Map<string, Array<{ jid: string; text: string }>>();
+  private outgoingQueue = new Map<
+    string,
+    Array<{ jid: string; text: string }>
+  >();
   private sentCounter = 0;
   private opts: WebChannelOpts;
 
@@ -74,7 +77,9 @@ export class WebChannel implements Channel {
     this.port = parseInt(env.WEB_PORT || '9900', 10);
 
     if (this.users.size === 0) {
-      throw new Error('WEB_USERS must be set in .env (format: user:pass,user2:pass2)');
+      throw new Error(
+        'WEB_USERS must be set in .env (format: user:pass,user2:pass2)',
+      );
     }
   }
 
@@ -150,7 +155,11 @@ export class WebChannel implements Channel {
    * WebChannel driver — see e2e.test.ts's E2EDriver design.
    * Returns false (no-op) when conversationId/text fail validation.
    */
-  ingestMessage(username: string, conversationId: string, text: string): boolean {
+  ingestMessage(
+    username: string,
+    conversationId: string,
+    text: string,
+  ): boolean {
     if (!CONVERSATION_ID_PATTERN.test(conversationId) || !text) return false;
 
     const jid = buildJid(username, conversationId);
@@ -188,7 +197,11 @@ export class WebChannel implements Channel {
     // falls back to its id if it wasn't created explicitly via the UI first.
     if (username && !this.opts.registeredGroups()[jid]) {
       const conversationId = jid.slice(`web:${username}:`.length);
-      this.ensureConversationRegistered(username, conversationId, conversationId);
+      this.ensureConversationRegistered(
+        username,
+        conversationId,
+        conversationId,
+      );
     }
     this.opts.onMessage(jid, message);
   }
@@ -300,7 +313,11 @@ export class WebChannel implements Channel {
         return;
       }
       const conversationId = generateConversationId(title);
-      this.ensureConversationRegistered(session.username, conversationId, title);
+      this.ensureConversationRegistered(
+        session.username,
+        conversationId,
+        title,
+      );
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ conversationId, name: title }));
       return;
@@ -331,7 +348,9 @@ export class WebChannel implements Channel {
       const text = typeof body.text === 'string' ? body.text : '';
       if (!this.ingestMessage(session.username, conversationId, text)) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'conversationId and text are required' }));
+        res.end(
+          JSON.stringify({ error: 'conversationId and text are required' }),
+        );
         return;
       }
 
@@ -388,7 +407,10 @@ export class WebChannel implements Channel {
     }
 
     const token = crypto.randomBytes(24).toString('hex');
-    this.sessions.set(token, { username, expiresAt: Date.now() + SESSION_TTL_MS });
+    this.sessions.set(token, {
+      username,
+      expiresAt: Date.now() + SESSION_TTL_MS,
+    });
 
     res.writeHead(200, {
       'Content-Type': 'application/json',
@@ -408,7 +430,10 @@ export class WebChannel implements Channel {
     );
   }
 
-  private handleLogout(req: http.IncomingMessage, res: http.ServerResponse): void {
+  private handleLogout(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): void {
     const token = this.cookieFrom(req);
     if (token) this.sessions.delete(token);
     res.writeHead(200, {
@@ -440,7 +465,9 @@ export class WebChannel implements Channel {
     return undefined;
   }
 
-  private readJsonBody(req: http.IncomingMessage): Promise<Record<string, unknown>> {
+  private readJsonBody(
+    req: http.IncomingMessage,
+  ): Promise<Record<string, unknown>> {
     return new Promise((resolve) => {
       const chunks: Buffer[] = [];
       req.on('data', (chunk) => chunks.push(chunk));
@@ -464,7 +491,10 @@ export class WebChannel implements Channel {
     const result: Array<{ conversationId: string; name: string }> = [];
     for (const [jid, group] of Object.entries(groups)) {
       if (jid.startsWith(prefix) && jid !== `${prefix}_root`) {
-        result.push({ conversationId: jid.slice(prefix.length), name: group.name });
+        result.push({
+          conversationId: jid.slice(prefix.length),
+          name: group.name,
+        });
       }
     }
     return result;
@@ -500,7 +530,13 @@ export class WebChannel implements Channel {
     // through this channel, so the registration path is the same one
     // index.ts itself uses.
     groups[jid] = group;
-    this.opts.onChatMetadata(jid, new Date().toISOString(), title, 'web', false);
+    this.opts.onChatMetadata(
+      jid,
+      new Date().toISOString(),
+      title,
+      'web',
+      false,
+    );
     logger.info({ jid, folder }, 'Web channel: conversation registered');
   }
 }

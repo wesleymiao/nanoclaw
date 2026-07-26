@@ -32,8 +32,13 @@ vi.mock('../logger.js', () => ({
   },
 }));
 
-const { WebChannel, parseWebUsers, usernameFromJid, buildJid, generateConversationId } =
-  await import('./web.js');
+const {
+  WebChannel,
+  parseWebUsers,
+  usernameFromJid,
+  buildJid,
+  generateConversationId,
+} = await import('./web.js');
 const { searchMessages } = await import('../db.js');
 
 // ── Helpers ─────────────────────────────────────────────────
@@ -228,7 +233,9 @@ describe('WebChannel', () => {
         cookie,
       });
       expect(created.status).toBe(200);
-      expect(created.body.conversationId).toMatch(/^trip-planning-[a-f0-9]{6}$/);
+      expect(created.body.conversationId).toMatch(
+        /^trip-planning-[a-f0-9]{6}$/,
+      );
 
       const list = await request(port, 'GET', '/api/conversations', { cookie });
       expect(list.status).toBe(200);
@@ -334,7 +341,10 @@ describe('WebChannel', () => {
       const channel = new WebChannel(opts);
       await channel.connect();
       try {
-        const messageId = await channel.sendMessage('web:alice:conv1', 'buffered reply');
+        const messageId = await channel.sendMessage(
+          'web:alice:conv1',
+          'buffered reply',
+        );
         expect(messageId).toBeDefined();
         expect((channel as any).outgoingQueue.get('alice')).toEqual([
           { jid: 'web:alice:conv1', text: 'buffered reply' },

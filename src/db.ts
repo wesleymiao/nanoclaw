@@ -182,9 +182,7 @@ function createSchema(database: Database.Database): void {
   // Backfilled from the existing `jid` column via parseGroupKey() so lookups
   // can use the explicit composite key instead of implicit jid parsing.
   try {
-    database.exec(
-      `ALTER TABLE registered_groups ADD COLUMN channel_type TEXT`,
-    );
+    database.exec(`ALTER TABLE registered_groups ADD COLUMN channel_type TEXT`);
     database.exec(`ALTER TABLE registered_groups ADD COLUMN tenant_id TEXT`);
     database.exec(
       `ALTER TABLE registered_groups ADD COLUMN conversation_id TEXT`,
