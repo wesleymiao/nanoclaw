@@ -76,6 +76,22 @@ export async function flushGroupMessages(groupFolder: string): Promise<void> {
   }
 }
 
+/**
+ * Test-only: reset the module-level watcher guard so a fresh `startIpcWatcher()`
+ * call actually (re)starts the periodic polling loop.
+ *
+ * Needed because each vitest test in e2e.test.ts switches between fake and real
+ * timers (`vi.useFakeTimers()`/`vi.useRealTimers()`); when a test ends, any
+ * fake-timer-scheduled `setTimeout` the watcher's recursive polling loop was
+ * waiting on is discarded rather than carried over — so without this reset,
+ * only the very first test in the file would ever actually run the watcher,
+ * and it would silently stop working for every subsequent test.
+ */
+export function _resetIpcWatcherForTesting(): void {
+  ipcWatcherRunning = false;
+  ipcDepsRef = null;
+}
+
 export function startIpcWatcher(deps: IpcDeps): void {
   if (ipcWatcherRunning) {
     logger.debug('IPC watcher already running, skipping duplicate start');

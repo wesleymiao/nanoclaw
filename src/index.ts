@@ -601,7 +601,27 @@ function ensureContainerSystemRunning(): void {
   cleanupOrphans();
 }
 
-async function main(): Promise<void> {
+/** Result of {@link bootstrapApp} — the real wiring, without process-lifecycle glue. */
+export interface BootstrappedApp {
+  channels: Channel[];
+  queue: GroupQueue;
+  /** Drains the queue and disconnects channels. Does NOT call process.exit —
+   * callers (main(), or a test) decide what happens after shutdown resolves. */
+  shutdown: () => Promise<void>;
+}
+
+/**
+ * Wires up the real orchestrator: database, channels, queue, IPC watcher,
+ * scheduler, session cleanup, and the message loop. Contains every piece of
+ * NanoClaw's own logic that a real run needs — no mocks live in here.
+ *
+ * Deliberately excludes process-lifecycle concerns (signal handlers,
+ * process.exit) so it can be exercised directly in tests: a fake Channel is
+ * registered via the real `registerChannel()` mechanism before calling this,
+ * and the returned `shutdown()` lets a test end the run without killing the
+ * test process itself.
+ */
+export async function bootstrapApp(): Promise<BootstrappedApp> {
   ensureContainerSystemRunning();
   initDatabase();
   logger.info('Database initialized');
@@ -615,15 +635,10 @@ async function main(): Promise<void> {
 
   restoreRemoteControl();
 
-  // Graceful shutdown handlers
-  const shutdown = async (signal: string) => {
-    logger.info({ signal }, 'Shutdown signal received');
+  const shutdown = async (): Promise<void> => {
     await queue.shutdown(10000);
     for (const ch of channels) await ch.disconnect();
-    process.exit(0);
   };
-  process.on('SIGTERM', () => shutdown('SIGTERM'));
-  process.on('SIGINT', () => shutdown('SIGINT'));
 
   // Handle /remote-control and /remote-control-end commands
   async function handleRemoteControl(
@@ -797,6 +812,36 @@ async function main(): Promise<void> {
     logger.fatal({ err }, 'Message loop crashed unexpectedly');
     process.exit(1);
   });
+
+  return { channels, queue, shutdown };
+}
+
+/** @internal - for tests only. Resets all module-level state so `bootstrapApp()`
+ * can be called repeatedly across independent test cases in the same process. */
+export function _resetAppStateForTesting(): void {
+  lastTimestamp = '';
+  sessions = {};
+  registeredGroups = {};
+  lastAgentTimestamp = {};
+  messageLoopRunning = false;
+  channels.length = 0;
+  queue._resetForTesting();
+}
+
+async function main(): Promise<void> {
+  const app = await bootstrapApp();
+
+  // Graceful shutdown handlers — process-lifecycle glue lives only here,
+  // not in bootstrapApp(), so tests can drive shutdown without exiting.
+  const handleSignal = (signal: string) => {
+    logger.info({ signal }, 'Shutdown signal received');
+    app
+      .shutdown()
+      .catch((err) => logger.error({ err }, 'Error during shutdown'))
+      .finally(() => process.exit(0));
+  };
+  process.on('SIGTERM', () => handleSignal('SIGTERM'));
+  process.on('SIGINT', () => handleSignal('SIGINT'));
 }
 
 // Guard: only run when executed directly, not when imported by tests

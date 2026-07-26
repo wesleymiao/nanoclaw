@@ -1,0 +1,440 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NanoClaw Interactive Architecture</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --panel: #161b22;
+      --panel2: #1c2128;
+      --border: #30363d;
+      --text: #e6edf3;
+      --muted: #8b949e;
+      --blue: #58a6ff;
+      --green: #3fb950;
+      --purple: #bc8cff;
+      --orange: #d29922;
+      --cyan: #79c0ff;
+      --red: #f85149;
+      --pink: #f778ba;
+      --shadow: 0 12px 30px rgba(0,0,0,.28);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif;
+      font-size: 18px;
+    }
+    .app { display: grid; grid-template-columns: 270px minmax(0, 1fr); min-height: 100vh; }
+    .toc {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      padding: 22px 16px;
+      background: #0a0e13;
+      border-right: 1px solid var(--border);
+      overflow-y: auto;
+      z-index: 30;
+    }
+    .brand { padding: 0 8px 20px; border-bottom: 1px solid var(--border); }
+    .brand strong { display: block; font-size: 22px; color: var(--text); }
+    .brand span { display: block; margin-top: 6px; color: var(--muted); font-size: 14px; line-height: 1.45; }
+    .toc-label {
+      margin: 20px 8px 9px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+    .toc-note {
+      margin: 22px 8px 0;
+      padding: 12px;
+      border: 1px solid var(--border);
+      border-radius: 9px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+      background: var(--panel);
+    }
+    .content { min-width: 0; }
+    .page-header {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      background: rgba(13,17,23,.95);
+      backdrop-filter: blur(10px);
+      border-bottom: 1px solid var(--border);
+      padding: 17px 24px 14px;
+    }
+    h1 { margin: 0; font-size: 31px; }
+    .page-header p { color: var(--muted); margin: 5px 0 0; font-size: 16px; }
+    nav { display: flex; flex-direction: column; gap: 7px; margin-top: 4px; }
+    button {
+      background: var(--panel);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 13px;
+      cursor: pointer;
+      font-weight: 650;
+    }
+    button:hover, button.active { border-color: var(--blue); color: var(--blue); }
+    nav button {
+      width: 100%;
+      padding: 10px 11px;
+      text-align: left;
+      border-color: transparent;
+      background: transparent;
+      color: var(--muted);
+    }
+    nav button::before {
+      content: "";
+      display: inline-block;
+      width: 7px;
+      height: 7px;
+      margin-right: 9px;
+      border-radius: 50%;
+      background: var(--border);
+    }
+    nav button.active { background: var(--panel); }
+    nav button.active::before { background: var(--blue); box-shadow: 0 0 10px var(--blue); }
+    main { padding: 20px; max-width: 1760px; margin: auto; }
+    .view { display: none; }
+    .view.active { display: block; }
+    .canvas, .card, table {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      box-shadow: var(--shadow);
+    }
+    .canvas { overflow: auto; min-height: 670px; width: 100%; }
+    code {
+      color: var(--cyan);
+      background: #0d1117;
+      padding: 2px 5px;
+      border-radius: 4px;
+    }
+    /* Bottom detail drawer replaces the old right-hand side panel so the
+       diagram canvas can use the full content width at all times. */
+    .detail-drawer {
+      position: fixed;
+      left: 270px;
+      right: 0;
+      bottom: 0;
+      max-height: 46vh;
+      background: var(--panel);
+      border-top: 1px solid var(--border);
+      box-shadow: 0 -12px 30px rgba(0,0,0,.4);
+      transform: translateY(100%);
+      transition: transform .22s ease;
+      z-index: 40;
+      overflow-y: auto;
+    }
+    .detail-drawer.open { transform: translateY(0); }
+    .detail-drawer-inner { padding: 18px 26px 26px; max-width: 1100px; }
+    .detail-drawer h2 { font-size: 21px; color: var(--blue); margin: 0 0 8px; }
+    .detail-drawer h3 { font-size: 15px; margin: 14px 0 4px; color: var(--text); }
+    .detail-drawer p, .detail-drawer li { color: var(--muted); line-height: 1.55; font-size: 15px; }
+    .detail-drawer-close {
+      position: absolute;
+      top: 12px;
+      right: 18px;
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      font-size: 15px;
+      line-height: 1;
+      cursor: pointer;
+    }
+    .detail-drawer-close:hover { color: var(--blue); border-color: var(--blue); }
+    .detail-hint { color: var(--muted); font-size: 14px; margin: 10px 0 12px; }
+    .legend { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 12px; }
+    .section-kicker {
+      color: var(--blue); font-size: 13px; font-weight: 800;
+      letter-spacing: .06em; text-transform: uppercase; margin: 0 0 10px;
+    }
+    .pill {
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 4px 8px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .pill.host { border-color: var(--blue); color: var(--blue); }
+    .pill.container { border-color: var(--green); color: var(--green); }
+    .pill.external { border-color: var(--orange); color: var(--orange); }
+    .pill.secret { border-color: var(--red); color: var(--red); }
+    svg { width: 100%; min-width: 1100px; display: block; }
+    .node { cursor: pointer; transition: filter .15s, opacity .15s; }
+    .node:hover { filter: brightness(1.25); }
+    .node.selected rect, .node.selected path { stroke-width: 4; }
+    .dim { opacity: .16; }
+    .flow { transition: opacity .2s; }
+    .flow.hidden { opacity: .08; }
+    .edge-label { font-size: 11px; fill: var(--muted); }
+    .node-title { font-size: 14px; font-weight: 750; fill: var(--text); }
+    .node-sub { font-size: 11px; fill: var(--muted); }
+    .section-label { font-size: 16px; font-weight: 800; }
+    .controls { padding: 13px; border-bottom: 1px solid var(--border); display:flex; gap:8px; flex-wrap:wrap; }
+    .controls button { font-size: 14px; }
+    .grid { display:grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap:14px; }
+    .card { padding: 18px; }
+    .card.wide { grid-column: 1 / -1; }
+    .card ol { margin: 0; padding-left: 20px; }
+    .card ol li { margin-bottom: 10px; }
+    .card ol li:last-child { margin-bottom: 0; }
+    .card ol li strong { color: var(--text); }
+    .card h2 { font-size: 19px; margin: 0 0 8px; color: var(--blue); }
+    .card p, .card li { color: var(--muted); font-size: 15px; line-height: 1.55; }
+    .warning { border-left: 4px solid var(--orange); }
+    .risk { border-left: 4px solid var(--red); }
+    .good { border-left: 4px solid var(--green); }
+    .tier-ladder, .stack { display:flex; flex-direction:column; gap:14px; }
+    .walkthrough-row { display:flex; gap:16px; align-items:flex-start; }
+    .walkthrough-row .canvas { flex: 1 1 65%; min-width: 0; margin: 0; }
+    .walkthrough-row .steps-col { flex: 0 0 380px; max-width: 380px; }
+    .walkthrough-row .steps-col .card { height: 100%; }
+    @media (max-width: 1300px) {
+      .walkthrough-row { flex-direction: column; }
+      .walkthrough-row .steps-col { flex: 1 1 auto; max-width: none; width: 100%; }
+    }
+    .stage-num {
+      display:inline-flex; align-items:center; justify-content:center;
+      width:26px; height:26px; margin-right:10px; border-radius:50%;
+      background: var(--panel2); border:1px solid var(--border);
+      font-size:14px; font-weight:800; color: var(--blue); vertical-align:middle;
+    }
+    .tier-badge {
+      display:inline-block; margin-right:10px; padding:3px 9px; border-radius:6px;
+      font-size:13px; font-weight:800; letter-spacing:.03em; vertical-align:middle;
+    }
+    .tier-badge.t0 { background: rgba(63,185,80,.15); color: var(--green); }
+    .tier-badge.t1 { background: rgba(88,166,255,.15); color: var(--blue); }
+    .tier-badge.t2 { background: rgba(210,153,34,.15); color: var(--orange); }
+    .tier-badge.t0e { background: rgba(188,140,255,.15); color: var(--purple); }
+    .fr-line { margin: 0 0 10px; padding: 8px 12px; background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; font-size: 14px; color: var(--muted); }
+    .fr-line strong.faked { color: var(--orange); }
+    .fr-line strong.real { color: var(--green); }
+    table { width:100%; border-collapse: collapse; overflow:hidden; }
+    th, td { padding: 12px; border-bottom: 1px solid var(--border); text-align:left; font-size:15px; }
+    th { color: var(--blue); background: var(--panel2); position:sticky; top:0; }
+    td { color: var(--muted); vertical-align:top; }
+    td strong { color: var(--text); }
+    .rw { color: var(--orange); font-weight: 700; }
+    .ro { color: var(--green); font-weight: 700; }
+    .hostonly { color: var(--purple); font-weight: 700; }
+    @media (max-width: 1100px) {
+      .app { grid-template-columns: 1fr; }
+      .toc { position: static; width: 100%; height: auto; border-right: 0; border-bottom: 1px solid var(--border); }
+      .toc nav { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .toc-note { display: none; }
+      .page-header { position: static; }
+      .grid { grid-template-columns: 1fr; }
+      .detail-drawer { left: 0; }
+    }
+  </style>
+</head>
+<body>
+<div class="app">
+  <aside class="toc">
+    <div class="brand">
+      <strong>NanoClaw</strong>
+      <span>Interactive architecture reference</span>
+    </div>
+    <div class="toc-label">Contents</div>
+    <nav aria-label="Document overview">
+      <button class="tab active" data-view="context">0 · Overview &amp; Context</button>
+    </nav>
+    <div class="toc-label" style="margin-top:14px">1 · Current Single-VM Architecture</div>
+    <nav aria-label="Current single-VM architecture sections">
+      <button class="tab" data-view="overview">1.1 Core Architecture</button>
+      <button class="tab" data-view="auth">1.2 Credentials & Authentication</button>
+      <button class="tab" data-view="session">1.3 Session Lifecycle</button>
+      <button class="tab" data-view="image">1.4 Container Image Build</button>
+      <button class="tab" data-view="scale">1.5 Scaling</button>
+      <button class="tab" data-view="matrix">1.6 Credential Matrix</button>
+    </nav>
+    <div class="toc-label" style="margin-top:14px">2 · Test Harnesses</div>
+    <nav aria-label="Test harness sections">
+      <button class="tab" data-view="harness-today">2.1 Testing Today's Single-VM System</button>
+      <button class="tab" data-view="testability">2.2 Testing the Multi-VM Design</button>
+    </nav>
+    <div class="toc-label" style="margin-top:14px">3 · Multi-Tenancy Multi-VM Design</div>
+    <nav aria-label="Multi-tenancy multi-VM design sections">
+      <button class="tab" data-view="walkthrough">3.1 Multi-tenancy Multi-VM Design with Walkthroughs</button>
+      <button class="tab" data-view="rollout">3.2 Implementation Stages</button>
+    </nav>
+    <div class="toc-note">
+      <strong style="color:var(--text)">How to use</strong><br>
+      Select a section here. In diagrams, click a component to inspect its responsibility and trust boundary.
+    </div>
+  </aside>
+  <div class="content">
+    <header class="page-header">
+      <h1>NanoClaw Interactive Architecture</h1>
+      <p>Core loop, session continuity, containers, mounts, credentials, and trust boundaries.</p>
+    </header>
+
+<main>
+  <section id="context" class="view active">
+  </section>
+
+
+  <section id="overview" class="view">
+  </section>
+
+  <section id="auth" class="view">
+  </section>
+
+  <section id="session" class="view">
+  </section>
+
+  <section id="image" class="view">
+  </section>
+
+  <section id="scale" class="view">
+  </section>
+
+  <section id="walkthrough" class="view">
+  </section>
+
+
+  <section id="rollout" class="view">
+  </section>
+
+
+  <section id="harness-today" class="view">
+  </section>
+
+
+  <section id="testability" class="view">
+  </section>
+
+
+  <section id="matrix" class="view">
+  </section>
+</main>
+  </div>
+</div>
+
+<div class="detail-drawer" id="detailDrawer">
+  <button class="detail-drawer-close" id="detailDrawerClose" aria-label="Close detail panel">×</button>
+  <div class="detail-drawer-inner" id="detailDrawerInner"></div>
+</div>
+
+<script>
+  const details = {
+    overview: {
+      feishu: ["Feishu / Lark", "NanoClaw uses the chat ID as the routing identity. Each registered chat maps to a group folder and therefore to isolated project, session, and IPC state."],
+      router: ["Channel Router", "The host channel adapter authenticates to Feishu, polls or receives events, advances routing cursors, and sends agent replies back to the originating chat."],
+      queue: ["Per-group Queue", "Messages from one group remain ordered independently of other groups. The global container concurrency limit defaults to five."],
+      runner: ["Container Runner", "Constructs Docker arguments, credentials, and bind mounts. It passes the prompt and previous Claude session UUID on stdin and tracks idle/hard timeouts."],
+      sessionManager: ["Session Manager", "Maintains group-folder → session-UUID in memory and SQLite. New UUIDs emitted by the agent are persisted. Missing transcript errors clear stale IDs."],
+      container: ["Disposable Group Container", "Runs agent-runner and Claude Code. It has tools and selected credentials, but its durable workspace, Claude state, and IPC directories live on the host."],
+      hostState: ["Persistent Host State", "The durable identity of an agent is its group folder plus session state—not the Docker container. Containers may be removed without losing recent context."]
+    },
+    auth: {
+      nanoclawEnv: ["NanoClaw .env", "Feishu credentials are read by the host channel and also injected into Feishu group containers for direct API access. The observed file mode is 664, meaning group/other read permissions should be reviewed."],
+      agentEnv: ["Container process environment", "The Feishu app ID/secret and the current chat ID are injected as plain environment variables into the group's container process."],
+      githubToken: ["GitHub OAuth token", "copilot-api reads this mode-600 host file. It calls GitHub's Copilot token endpoint, stores the returned short-lived token in memory, and refreshes at refresh_in minus 60 seconds. This file is never mounted into a container."],
+      agentLlm: ["LLM endpoint config", "The container only receives ANTHROPIC_BASE_URL pointing at the host gateway. It never sees the GitHub token or the exchanged Copilot token."],
+      cliCreds: ["CLI credential stores", "Azure and Baidu are mounted read-write for refresh. GitHub CLI is mounted read-only. Read-only prevents persistent modification but does not prevent a container from using or reading the identity."],
+      agentCli: ["Bind-mounted CLI stores", "Azure, GitHub CLI, and BaiduPCS-Go credential directories are bind-mounted straight from the host. Every group container shares the same host-user identity for these tools."],
+      onecli: ["OneCLI gateway (alternative)", "When no local Anthropic base URL is configured, OneCLI can inject credentials through a gateway so the container never sees real upstream secrets."],
+      onecliNote: ["Currently bypassed", "NanoClaw sets ANTHROPIC_BASE_URL to the local copilot-api gateway, so the OneCLI credential-injection path is deliberately skipped to avoid HTTP_PROXY conflicts."],
+      copilotApi: ["copilot-api trust boundary", "The Copilot credential remains in a long-running host service rather than every ephemeral agent. Containers receive only endpoint configuration and make Anthropic-shaped requests to the local gateway."],
+      feishuApi: ["Feishu authentication", "The app ID and secret identify the NanoClaw Feishu application. The SDK obtains platform access tokens and can receive events, send messages, and perform enabled app operations."],
+      cloudApis: ["Tool API identities", "Agent shell commands such as az and gh authenticate using the mounted host caches. All groups currently share the same underlying user identities."],
+      githubCloud: ["GitHub/Copilot exchange", "Long-lived GitHub OAuth token → GitHub Copilot token endpoint → short-lived Copilot token → Authorization header on chat/completions."]
+    },
+    multivm: {
+      feishu: ["Feishu / WeCom / Slack (bot-app channels = their own ingress)", "Azure Container Apps, one revision pinned to a single replica per bot app (min=max=1) so exactly one instance owns that app's persistent WS connection — Container Apps' built-in KEDA scaler is disabled per-app and a Redis-backed lease (Azure Cache for Redis) enforces the single-owner rule if a replacement replica starts before the old one drains. There is no separate Ingress/router service in front of it: this app resolves its own routing key (channel, tenant_id, conversation_id) → group folder, publishes directly to the Service Bus queue, and subscribes directly to the pub/sub-by-conversation_id channel to relay streamed replies back to its own pinned WS connection — all via a shared internal routing library, not a deployed hop. Alternative: switch the app to Feishu's webhook-push mode and this tier becomes fully stateless, needing no lease at all."],
+      webChannel: ["Web channel (new, its own ingress)", "Azure Container Apps (autoscaled on concurrent connections) behind Azure Front Door for global TLS termination and routing. Login/session validation uses Microsoft Entra External ID (formerly Azure AD B2C) rather than a hand-rolled auth service — it issues the JWT this app validates itself on every request/socket connect, using the same shared routing library as Feishu to resolve (channel, tenant_id, conversation_id) → group and publish directly to the queue. No separate Ingress/router service, and no external platform quota to shard around here, so this app scales like an ordinary stateless web app."],
+      queue: ["Distributed Queue", "Azure Service Bus, using session-enabled queues/topics — Service Bus sessions are purpose-built for 'strict FIFO within a partition key, any order across partitions,' which is exactly the per-group ordering guarantee NanoClaw's in-memory queue provides today. Partitioning by tenant_id additionally means one over-active tenant can't starve other tenants' sessions. Sessions also double as the sticky-routing mechanism: whichever worker first accepts a group's session holds an exclusive lock on it and keeps receiving from that same locked session (not re-accepting per message) for as long as the group's container stays warm, so every message in one conversation within the 30-minute idle window lands on the same worker automatically. The worker releases the lock only at idle-teardown (or the lock's TTL expires if the worker crashes), which is the only point a different worker can pick the conversation up next."],
+      registry: ["Session & Lease Registry", "Azure Cosmos DB is the strongest fit: leases need a TTL that expires automatically if a worker dies, and Cosmos DB has native per-item TTL plus single-digit-millisecond point reads/writes at any scale. Azure Database for PostgreSQL – Flexible Server is a simpler alternative if the team prefers relational tooling and TTL is instead enforced by a periodic sweep. Key is (channel, tenant_id, conversation) → session UUID + worker lease."],
+      autoscaler: ["Autoscaler", "Azure Monitor autoscale rule on the worker VMSS (or KEDA if the team already runs an AKS-based scaler), driven by a Service Bus custom metric: queue depth divided by total pool container capacity (active workers × 5 concurrent-container slots each). Scale-out fires fast (e.g. pool-wide slot utilization sustained above ~90% for 2 minutes) since a new VM just needs to boot and start long-polling — it's a capacity add, not a request-by-request decision. Scale-in is deliberately slower and lease-aware: a worker VM only gets removed once its own container count drops to zero (checked against the registry), so a mid-run group is never killed — this is the same 'exactly one owner per group' invariant, just applied to the decommission path too. Note the two layers are independent: adding a container to an existing VM is near-instant (a docker run) and needs no autoscaler involvement at all; the autoscaler only acts when the whole pool's container capacity, not any single VM's, is the constraint."],
+      worker1: ["Worker VM (Azure VMSS)", "Azure Virtual Machine Scale Set, not Container Apps/AKS-without-privilege — each group container runs Docker-in-Docker plus a Chromium/Playwright process, which needs nested containerization and privileged capabilities that managed serverless-container platforms don't expose. A VMSS gives autoscale-by-metric (CPU, queue depth) and rolling image updates while keeping the same Docker-daemon-per-host model NanoClaw already uses today. Not drawn separately, but every worker also calls a small, replicated copilot-api gateway (Azure Container Apps, reading the GitHub token from Azure Key Vault) instead of one host's local file. Wake-up is push-shaped, not poll-shaped: each idle worker holds a blocking Service Bus ReceiveAsync call open, so it returns the instant a message lands — there's no idle CPU-spinning loop. Adding a container to a VM is a local, sub-second action: on lease acquisition the runtime just runs 'docker run' for that group up to the VM's own concurrency limit (5 here, matching today's global limit); on idle timeout it runs 'docker rm'. This container-level scaling never touches the autoscaler — the VMSS only gets involved when every VM in the pool is near its own container limit at once, at which point it's a capacity problem for the whole pool, not one VM."],
+      worker2: ["Worker VM (Azure VMSS)", "Same VMSS pool as every other worker instance — there is no special-cased worker. Adding capacity is an autoscale rule on the scale set, not a manual VM add."],
+      workerN: ["Worker VM (Azure VMSS)", "The VMSS can scale in/out independently of the channel apps and the queue, since none of them hold worker- or channel-specific state. Spot/low-priority VMSS instances are a viable cost optimization here since any worker losing its lease just returns its groups to the queue."],
+      storage: ["Shared durable storage", "Azure Files (Premium tier, SMB or NFS protocol) mounted over a private endpoint is the direct replacement for each VM's local disk. If IOPS/throughput at high group counts becomes a bottleneck, Azure NetApp Files gives the same POSIX semantics with substantially higher scale ceilings. Any worker that acquires a group's lease can read/write the same files a previous worker left behind, regardless of which channel created the group. The directory layout is unchanged from single-VM — one folder per group holding the workspace, the JSONL transcript, and the IPC input/output directories — only the backing volume moves from local disk to this shared network mount, which every worker sees at the identical path. IPC directories still do exactly what they do today (container-to-worker handoff of chat input and streamed output); the pub/sub reply channel is a separate, additional hop downstream of them that only exists because the relaying replica may now be on a different machine than the worker."]
+    }
+  };
+
+  const drawer = document.getElementById("detailDrawer");
+  const drawerInner = document.getElementById("detailDrawerInner");
+
+  function setDetail(view, key) {
+    const item = details[view][key];
+    if (!item) return;
+    drawerInner.innerHTML = `<h2>${item[0]}</h2><p>${item[1]}</p>
+      <h3>Trust boundary</h3>
+      <p>Click other nodes to compare where state and credentials live.</p>`;
+    drawer.classList.add("open");
+    document.querySelectorAll(`#${view} .node`).forEach(n => n.classList.toggle("selected", n.dataset.key === key));
+  }
+
+  document.getElementById("detailDrawerClose").addEventListener("click", () => drawer.classList.remove("open"));
+
+  // Each <section id> in <main> is an empty placeholder — its content lives in its
+  // own file under ./sections/ so a single section can be edited/reviewed in isolation.
+  // Fetch and inject each fragment, then wire up interactivity via event delegation
+  // (delegation means listeners work regardless of when/whether a fragment has loaded).
+  document.querySelectorAll("main > section[id]").forEach(section => {
+    fetch(`sections/${section.id}.html`)
+      .then(r => {
+        if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+        return r.text();
+      })
+      .then(text => { section.innerHTML = text; })
+      .catch(err => {
+        section.innerHTML = `<p class="detail-hint">Failed to load sections/${section.id}.html — ${err.message}</p>`;
+        console.error("Section load failed:", section.id, err);
+      });
+  });
+
+  // Maps a <section id> to the key used in the `details` object above — only
+  // "walkthrough" differs (its diagrams' data-key entries live under "multivm").
+  const detailViewForSection = { overview: "overview", auth: "auth", walkthrough: "multivm" };
+
+  document.addEventListener("click", (e) => {
+    const tab = e.target.closest(".tab");
+    if (tab) {
+      document.querySelectorAll(".tab").forEach(b => b.classList.remove("active"));
+      document.querySelectorAll(".view").forEach(v => v.classList.remove("active"));
+      tab.classList.add("active");
+      document.getElementById(tab.dataset.view).classList.add("active");
+      drawer.classList.remove("open");
+      return;
+    }
+
+    const node = e.target.closest(".node, .auth-node, .mv-node");
+    if (node) {
+      const sectionEl = node.closest(".view");
+      const view = sectionEl && detailViewForSection[sectionEl.id];
+      if (view) setDetail(view, node.dataset.key);
+      return;
+    }
+
+    const filterBtn = e.target.closest(".auth-filter");
+    if (filterBtn) {
+      document.querySelectorAll(".auth-filter").forEach(b => b.classList.remove("active"));
+      filterBtn.classList.add("active");
+      const flow = filterBtn.dataset.flow;
+      document.querySelectorAll(".auth-flow").forEach(edge => {
+        edge.classList.toggle("hidden", flow !== "all" && !edge.classList.contains(flow));
+      });
+      return;
+    }
+  });
+</script>
+</body>
+</html>
+

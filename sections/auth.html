@@ -1,0 +1,139 @@
+    <p class="section-kicker">1.2 · Credentials &amp; Authentication</p>
+    <p class="detail-hint">Click any box to open its detail panel at the bottom of the screen.</p>
+    <div class="canvas">
+        <div class="controls">
+          <button class="auth-filter active" data-flow="all">All flows</button>
+          <button class="auth-filter" data-flow="llm">LLM / Copilot</button>
+          <button class="auth-filter" data-flow="chat">Feishu</button>
+          <button class="auth-filter" data-flow="tool">CLI tools</button>
+          <button class="auth-filter" data-flow="onecli">OneCLI alternative</button>
+        </div>
+        <svg viewBox="0 0 1340 820" aria-label="NanoClaw credentials and authentication">
+          <defs>
+            <marker id="aBlue" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#58a6ff"/></marker>
+            <marker id="aGreen" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#3fb950"/></marker>
+            <marker id="aOrange" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#d29922"/></marker>
+            <marker id="aPurple" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#bc8cff"/></marker>
+            <marker id="aRed" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#f85149"/></marker>
+          </defs>
+          <text x="25" y="30" class="section-label" fill="#f85149">Host credential sources</text>
+          <text x="365" y="30" class="section-label" fill="#3fb950">Group container</text>
+          <text x="755" y="30" class="section-label" fill="#bc8cff">Host gateway</text>
+          <text x="1005" y="30" class="section-label" fill="#d29922">External services</text>
+
+          <!-- Column B outer dashed wrapper (the container trust boundary) -->
+          <rect x="365" y="58" width="350" height="725" rx="15" fill="#0f1318" stroke="#3fb950" stroke-width="2" stroke-dasharray="8 5"/>
+
+          <!-- Band 1: Feishu credentials (y 65-185), fully aligned across columns -->
+          <g class="node auth-node" data-key="nanoclawEnv">
+            <rect x="25" y="65" width="300" height="120" rx="12" fill="#161b22" stroke="#f85149" stroke-width="2"/>
+            <text x="175" y="103" text-anchor="middle" class="node-title">~/nanoclaw/.env</text>
+            <text x="175" y="130" text-anchor="middle" class="node-sub">Feishu app ID + app secret</text>
+            <text x="175" y="152" text-anchor="middle" class="node-sub">current mode observed: 664</text>
+          </g>
+          <g class="node auth-node" data-key="agentEnv">
+            <rect x="395" y="75" width="290" height="100" rx="10" fill="#161b22" stroke="#f85149" stroke-width="2"/>
+            <text x="540" y="107" text-anchor="middle" class="node-title">Process environment</text>
+            <text x="540" y="133" text-anchor="middle" class="node-sub">FEISHU_APP_ID / APP_SECRET</text>
+            <text x="540" y="155" text-anchor="middle" class="node-sub">FEISHU_CHAT_ID</text>
+          </g>
+          <g class="node auth-node" data-key="feishuApi">
+            <rect x="1005" y="65" width="295" height="120" rx="12" fill="#161b22" stroke="#d29922" stroke-width="2"/>
+            <text x="1152" y="103" text-anchor="middle" class="node-title">Feishu Open Platform</text>
+            <text x="1152" y="130" text-anchor="middle" class="node-sub">app credentials → tenant access token</text>
+            <text x="1152" y="152" text-anchor="middle" class="node-sub">read events, post messages, upload files</text>
+          </g>
+
+          <!-- Band 2: LLM / Copilot credentials (y 225-405) -->
+          <g class="node auth-node" data-key="githubToken">
+            <rect x="25" y="235" width="300" height="160" rx="12" fill="#161b22" stroke="#bc8cff" stroke-width="2"/>
+            <text x="175" y="273" text-anchor="middle" class="node-title">copilot-api/github_token</text>
+            <text x="175" y="300" text-anchor="middle" class="node-sub">long-lived GitHub OAuth token</text>
+            <text x="175" y="322" text-anchor="middle" class="node-sub">host file mode: 600</text>
+            <text x="175" y="350" text-anchor="middle" class="node-sub" font-style="italic">never sent to a container</text>
+          </g>
+          <g class="node auth-node" data-key="agentLlm">
+            <rect x="395" y="245" width="290" height="140" rx="10" fill="#161b22" stroke="#bc8cff" stroke-width="2"/>
+            <text x="540" y="283" text-anchor="middle" class="node-title">LLM endpoint config</text>
+            <text x="540" y="309" text-anchor="middle" class="node-sub">ANTHROPIC_BASE_URL → host:4141</text>
+            <text x="540" y="331" text-anchor="middle" class="node-sub">Copilot token is NOT mounted here</text>
+          </g>
+          <g class="node auth-node" data-key="copilotApi">
+            <rect x="755" y="225" width="210" height="180" rx="12" fill="#161b22" stroke="#bc8cff" stroke-width="2"/>
+            <text x="860" y="258" text-anchor="middle" class="node-title" font-size="13">copilot-api :4141</text>
+            <text x="860" y="282" text-anchor="middle" class="node-sub">reads token, exchanges for</text>
+            <text x="860" y="300" text-anchor="middle" class="node-sub">short-lived Copilot token</text>
+            <text x="860" y="322" text-anchor="middle" class="node-sub">keeps it in process memory</text>
+            <text x="860" y="344" text-anchor="middle" class="node-sub">refresh at refresh_in − 60s</text>
+            <text x="860" y="378" text-anchor="middle" class="node-sub" font-style="italic">on host, not the container</text>
+          </g>
+          <g class="node auth-node" data-key="githubCloud">
+            <rect x="1005" y="225" width="295" height="180" rx="12" fill="#161b22" stroke="#58a6ff" stroke-width="2"/>
+            <text x="1152" y="263" text-anchor="middle" class="node-title">GitHub → Copilot APIs</text>
+            <text x="1152" y="292" text-anchor="middle" class="node-sub">OAuth exchange, then</text>
+            <text x="1152" y="314" text-anchor="middle" class="node-sub">chat/completions calls</text>
+          </g>
+
+          <!-- Band 3: CLI tool credentials (y 445-655) -->
+          <g class="node auth-node" data-key="cliCreds">
+            <rect x="25" y="455" width="300" height="190" rx="12" fill="#161b22" stroke="#79c0ff" stroke-width="2"/>
+            <text x="175" y="490" text-anchor="middle" class="node-title">Host CLI credential stores</text>
+            <text x="175" y="518" text-anchor="middle" class="node-sub">~/.azure/ → mounted RW</text>
+            <text x="175" y="540" text-anchor="middle" class="node-sub">~/.config/gh/ → mounted RO</text>
+            <text x="175" y="562" text-anchor="middle" class="node-sub">~/.config/BaiduPCS-Go/ → mounted RW</text>
+            <text x="175" y="590" text-anchor="middle" class="node-sub">same host identity shared</text>
+            <text x="175" y="610" text-anchor="middle" class="node-sub">by every container</text>
+          </g>
+          <g class="node auth-node" data-key="agentCli">
+            <rect x="395" y="465" width="290" height="170" rx="10" fill="#161b22" stroke="#79c0ff" stroke-width="2"/>
+            <text x="540" y="500" text-anchor="middle" class="node-title">Bind-mounted CLI stores</text>
+            <text x="540" y="528" text-anchor="middle" class="node-sub">/home/node/.azure (RW)</text>
+            <text x="540" y="550" text-anchor="middle" class="node-sub">/home/node/.config/gh (RO)</text>
+            <text x="540" y="572" text-anchor="middle" class="node-sub">BaiduPCS-Go config (RW)</text>
+            <text x="540" y="600" text-anchor="middle" class="node-sub">agent tools use identities directly</text>
+          </g>
+          <g class="node auth-node" data-key="cloudApis">
+            <rect x="1005" y="455" width="295" height="190" rx="12" fill="#161b22" stroke="#79c0ff" stroke-width="2"/>
+            <text x="1152" y="490" text-anchor="middle" class="node-title">Tool service APIs</text>
+            <text x="1152" y="518" text-anchor="middle" class="node-sub">Azure Resource Manager</text>
+            <text x="1152" y="540" text-anchor="middle" class="node-sub">GitHub API / git HTTPS</text>
+            <text x="1152" y="562" text-anchor="middle" class="node-sub">Baidu PCS</text>
+            <text x="1152" y="590" text-anchor="middle" class="node-sub">access level = host user's identity</text>
+          </g>
+
+          <!-- Band 4: OneCLI alternative (y 690-770), spans columns A-B only -->
+          <g class="node auth-node" data-key="onecli">
+            <rect x="25" y="700" width="300" height="70" rx="12" fill="#161b22" stroke="#f778ba" stroke-width="2"/>
+            <text x="175" y="726" text-anchor="middle" class="node-title" font-size="13">OneCLI gateway (alternative)</text>
+            <text x="175" y="750" text-anchor="middle" class="node-sub">intercepts HTTPS, injects credentials</text>
+          </g>
+          <g class="node auth-node" data-key="onecliNote">
+            <rect x="395" y="700" width="290" height="70" rx="10" fill="#161b22" stroke="#f778ba" stroke-width="2" stroke-dasharray="5 4"/>
+            <text x="540" y="726" text-anchor="middle" class="node-title" font-size="13">Currently bypassed</text>
+            <text x="540" y="750" text-anchor="middle" class="node-sub">skipped when ANTHROPIC_BASE_URL is set</text>
+          </g>
+
+          <!-- Band 1 arrows: fully horizontal, same row -->
+          <line class="flow auth-flow chat" x1="325" y1="120" x2="395" y2="120" stroke="#f85149" stroke-width="3" marker-end="url(#aRed)"/>
+          <text x="330" y="108" class="edge-label">docker -e</text>
+          <line class="flow auth-flow chat" x1="685" y1="120" x2="1005" y2="120" stroke="#d29922" stroke-width="3" marker-end="url(#aOrange)"/>
+          <text x="740" y="108" class="edge-label">direct API auth (bypasses gateway)</text>
+
+          <!-- Band 2: bypass lane above the band, credential never enters container -->
+          <path class="flow auth-flow llm" d="M325,290 L340,290 L340,205 L860,205 L860,225" fill="none" stroke="#bc8cff" stroke-width="3" stroke-dasharray="2 5" marker-end="url(#aPurple)"/>
+          <text x="420" y="197" class="edge-label">read directly (never mounted to container)</text>
+          <line class="flow auth-flow llm" x1="685" y1="315" x2="755" y2="315" stroke="#bc8cff" stroke-width="3" marker-end="url(#aPurple)"/>
+          <text x="686" y="303" class="edge-label">HTTP :4141</text>
+          <line class="flow auth-flow llm" x1="965" y1="300" x2="1005" y2="300" stroke="#58a6ff" stroke-width="3" marker-end="url(#aBlue)"/>
+
+          <!-- Band 3: fully horizontal -->
+          <line class="flow auth-flow tool" x1="325" y1="550" x2="395" y2="550" stroke="#79c0ff" stroke-width="3" marker-end="url(#aBlue)"/>
+          <text x="330" y="538" class="edge-label">bind mounts (RW/RO)</text>
+          <line class="flow auth-flow tool" x1="685" y1="550" x2="1005" y2="550" stroke="#79c0ff" stroke-width="3" marker-end="url(#aBlue)"/>
+          <text x="750" y="538" class="edge-label">CLI / API calls, host identity</text>
+
+          <!-- Band 4: fully horizontal, dashed to show inactive path -->
+          <line class="flow auth-flow onecli" x1="325" y1="735" x2="395" y2="735" stroke="#f778ba" stroke-width="3" stroke-dasharray="6 4" marker-end="url(#aPurple)"/>
+          <text x="330" y="723" class="edge-label">would inject credentials</text>
+        </svg>
+      </div>

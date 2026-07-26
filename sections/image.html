@@ -1,0 +1,22 @@
+    <p class="section-kicker">1.4 · Container Image Build</p>
+    <div class="grid">
+      <article class="card good"><h2>Build pipeline</h2><p><code>container/Dockerfile</code> installs Node, Chromium/Playwright, GitHub CLI, Azure CLI, and document tooling, then bakes in <code>claude-code</code> and the compiled agent-runner. <code>container/build.sh</code> runs <code>docker build -t nanoclaw-agent:latest .</code> once on the host.</p></article>
+      <article class="card"><h2>Local image, no registry</h2><p>The image is never pushed or pulled from a registry — it is built once into the host's local Docker image cache. Every <code>docker run</code> from Container Runner references the same cached image by tag, so container start-up only pays the cost of creating a new writable layer, not re-downloading anything.</p></article>
+      <article class="card"><h2>How containers get the image</h2><p><code>src/config.ts</code> defines <code>CONTAINER_IMAGE</code> (default <code>nanoclaw-agent:latest</code>, overridable via env var). <code>container-runner.ts</code> appends that exact tag as the final <code>docker run</code> argument — there is no per-request build step, just a reference to the pre-built image.</p></article>
+      <article class="card warning"><h2>Current sharing model: one image for all groups</h2><p>Today every group — Feishu, WeCom, Slack, solo chats — launches containers from the <strong>same</strong> <code>nanoclaw-agent:latest</code> image. Tooling, OS packages, and global npm installs are identical for every group; only mounts, env vars, and the prompt/session differ per container.</p></article>
+    </div>
+
+    <div class="stack" style="margin-top:16px">
+      <article class="card risk"><h2>Group-specific base images: not implemented</h2><p><code>ContainerConfig</code> (the per-group override object) currently only exposes <code>additionalMounts</code> and <code>timeout</code> — there is no <code>image</code> field, and <code>container-runner.ts</code> always uses the single global <code>CONTAINER_IMAGE</code> constant. A group cannot today request extra system packages or a different runtime without changing the shared image for everyone.</p></article>
+
+      <article class="card wide">
+        <h2>What adding it would take</h2>
+        <ol>
+          <li>Add an optional <code>image</code> field to <code>ContainerConfig</code>.</li>
+          <li>In <code>container-runner.ts</code>, resolve <code>group.containerConfig?.image ?? CONTAINER_IMAGE</code> before pushing the docker arg.</li>
+          <li>Adopt a tag convention such as <code>nanoclaw-agent:&lt;group&gt;</code>.</li>
+          <li>Build group images as <code>FROM nanoclaw-agent:latest</code> layers so they inherit the base tooling and only add group-specific packages.</li>
+          <li>Extend <code>build.sh</code> (or a sibling script) to build/tag those per-group images alongside the base one.</li>
+        </ol>
+      </article>
+    </div>

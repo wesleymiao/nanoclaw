@@ -1,0 +1,41 @@
+    <p class="section-kicker">2.2 · Testing the Multi-VM Design</p>
+    <p class="detail-hint">Chapter 3's stages swap in real Azure services one at a time — but real services are exactly what makes automated testing slow, costly, and flaky (no faithful emulator, TTL waits, cloud latency, contention you can't yet reproduce). That slowness is especially costly for <strong>agentic engineering</strong>: an AI coding agent implementing these stages needs to run the test suite after nearly every edit, many times per task, with no human in the loop to babysit a flaky or 30-minute-real-time run. This is the exact same ladder from 2.1, generalized: the fakes-vs-real split that already works for Docker/SQLite today extends to Redis/Postgres/Service Bus/blob storage tomorrow — cheapest first, so an agent can answer "did that change work?" in seconds most of the time, and only pays for full fidelity right before a stage is declared done.</p>
+
+    <div class="tier-ladder">
+      <article class="card wide">
+        <h2>Foundation — what makes the ladder possible</h2>
+        <ol>
+          <li><strong>Ports &amp; adapters for every shared dependency.</strong> Define a narrow interface for each dependency externalized in Stages 2–5 — <code>IQueue</code>, <code>ILeaseRegistry</code>, <code>IWorkspaceStorage</code>, <code>IReplyBus</code> — with two implementations each: a real Azure adapter and a local one. Application code only ever depends on the interface, selected via config/env var. Without this, "local" and "real" are different code paths, not the same code pointed at different backends.</li>
+          <li><strong>Controllable virtual clock for TTL &amp; lock-renewal logic.</strong> Inject a <code>Clock</code> abstraction (real wall-clock in prod, a fake advanceable clock in tests) everywhere TTL/lease-expiry/renewal math happens, so a test can assert "renews at 25 minutes, evicts at 30" by advancing milliseconds — no test ever calls real <code>sleep()</code>, which is what keeps every tier below fast <em>and</em> deterministic.</li>
+        </ol>
+      </article>
+
+      <article class="card wide good">
+        <h2><span class="tier-badge t0">TIER 0</span> In-memory fakes — sub-second, run on every edit</h2>
+        <p class="fr-line"><strong class="faked">Faked:</strong> <code>IQueue</code>, <code>ILeaseRegistry</code>, <code>IWorkspaceStorage</code>, <code>IReplyBus</code> (all in-memory/<code>Map</code>-backed), plus the wall clock via the <code>Clock</code> abstraction — no Redis, Postgres, Service Bus, or blob storage process runs. <strong class="real">Real:</strong> the application code behind each interface (queue partitioning, lease acquire/renew/expire math, workspace path resolution) — same code as production, different backend selected via config.</p>
+        <ol>
+          <li><strong>In-process fakes, no Docker required.</strong> Each interface gets a pure in-memory implementation (a <code>Map</code>-backed fake queue, an in-process fake lease registry, an in-memory blob store) running in the same process as the test. This is the loop an agent runs constantly while writing a single function — no <code>docker compose up</code> wait, no port contention across parallel agent tasks.</li>
+          <li><strong>One command, deterministic exit code.</strong> A single entrypoint (<code>npm run test:local</code> / <code>make test-local</code>) boots whatever the selected tier needs, runs the full suite, tears down, and exits non-zero on any failure — fixed seeds, the virtual clock, fixed ports/names, so re-runs never collide with leftover state. A test that fails for reasons unrelated to the code change is worse than no test for an agent loop — it teaches the agent to ignore red.</li>
+        </ol>
+      </article>
+
+      <article class="card wide">
+        <h2><span class="tier-badge t1">TIER 1</span> docker-compose local stack — seconds, run before marking a stage done</h2>
+        <p class="fr-line"><strong class="faked">Faked:</strong> multiple physical VMs (simulated as N worker containers on one machine) and live third-party chat traffic (Web's synthetic conversation generator stands in for it). <strong class="real">Real:</strong> Redis, Postgres, the Service Bus emulator, and Azurite/local SMB — actual server processes via <code>docker-compose.yml</code>, not fakes; real inter-process contention across worker containers.</p>
+        <ol>
+          <li><strong>docker-compose stack mirroring every Azure dependency.</strong> One <code>docker-compose.yml</code> brings up <strong>Redis</strong> (real image, identical to prod pub/sub), <strong>Azurite</strong> or a local SMB/NFS share, a <strong>Postgres</strong> container for the lease registry, and the <strong>Service Bus emulator</strong> for the queue. A developer — or agent — runs <code>docker compose up</code> and gets the whole multi-tenant backend on a laptop, no Azure subscription required.</li>
+          <li><strong>N worker containers on one machine = real concurrency, zero cloud.</strong> Stage 6's hardest risk (cross-worker races, lease hand-off, no double-processing) only needs multiple worker processes sharing the same queue/registry, not multiple physical VMs — 3-5 worker containers against the same compose backend reproduce genuine contention, runnable in CI on every pull request.</li>
+          <li><strong>Local chaos harness: kill/pause containers, not VMs.</strong> Reuse the N-worker setup to script the same chaos tests Stage 6 needs against real VMs — <code>docker kill</code> a worker mid-conversation and assert another resumes within the lock TTL, <code>docker pause</code>/unpause to simulate a stall, or a network-fault proxy (Toxiproxy) to inject latency/drops. Fully scriptable, deterministic enough for CI, and free.</li>
+          <li><strong>Web channel as the one synthetic traffic generator.</strong> Web needs no external webhook delivery or rate-limited third-party API, so it doubles as the load generator for the whole stack: a script opens hundreds of scripted "conversations," driving realistic queue depth, lease churn, and pub/sub fan-out — no live Feishu conversation required.</li>
+        </ol>
+      </article>
+
+      <article class="card wide warning">
+        <h2><span class="tier-badge t2">TIER 2</span> Real Azure contract tests — minutes, CI-only / pre-merge</h2>
+        <p class="fr-line"><strong class="faked">Faked:</strong> nothing in the adapters under test — this tier exists specifically to catch cases where Tier 0/1's fakes have quietly drifted from real Azure semantics. <strong class="real">Real:</strong> Azure Service Bus, Azure Database/Redis Cache, Blob Storage, Front Door, Microsoft Entra External ID, and Azure Monitor — an actual (minimal) Azure subscription.</p>
+        <ol>
+          <li><strong>Contract tests: same suite runs against fake and real adapters.</strong> Write the interface-level test suite once (e.g. "acquire → renew → expire", "publish → all subscribers receive exactly once") and run it against all three tiers in CI. This is what keeps the fast local suite trustworthy — if a fake and the real adapter ever diverge, the contract test catches it, so day-to-day (and agent) development can rely on the fast path without silently drifting from production semantics.</li>
+          <li><strong>What still can't be fully tested locally.</strong> Front Door's global edge routing/failover, the real Microsoft Entra External ID login flow, and Azure Monitor's actual metric-aggregation/autoscale-trigger timing all require a real (if minimal) Azure environment to verify end-to-end. The goal isn't to eliminate this last layer — it's to shrink it to a thin, infrequent final check, after the local stack has already caught nearly everything else.</li>
+        </ol>
+      </article>
+    </div>

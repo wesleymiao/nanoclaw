@@ -1,0 +1,21 @@
+    <p class="section-kicker">1.3 · Session Lifecycle</p>
+    <p class="detail-hint">Container lifetime and conversation lifetime are two related but separate clocks — this is the sequence they follow, then the edge cases where they diverge.</p>
+    <div class="stack">
+      <article class="card wide good">
+        <h2>Normal lifecycle</h2>
+        <ol>
+          <li><strong>Container starts on demand.</strong> A group container is disposable — it starts when a message arrives and stays alive while messages keep arriving.</li>
+          <li><strong>Within the idle window, follow-ups keep flowing.</strong> New chat messages are written into the group's IPC input directory and pushed into the active Claude message stream — same container, same conversation.</li>
+          <li><strong>Container exits after ~30 minutes of output inactivity.</strong> The Claude session UUID it was using is already persisted in SQLite, and its transcript is a JSONL file under the group-specific <code>.claude</code> directory — both outlive the container.</li>
+          <li><strong>After exit, the next message resumes the same conversation.</strong> A fresh container launches and the saved session UUID is passed to <code>query(resume: sessionId)</code>, picking up exactly where the transcript left off.</li>
+        </ol>
+      </article>
+
+      <article class="card wide warning">
+        <h2>Edge cases</h2>
+        <ol>
+          <li><strong>Retention boundary.</strong> Inactive JSONL transcripts are cleaned after 7 days. A stale UUID cannot restore context after its transcript is deleted.</li>
+          <li><strong>Context-loss behavior.</strong> If the transcript is missing, NanoClaw recognizes the stale-session error, deletes the UUID, and the following attempt begins a new conversation instead of failing outright.</li>
+        </ol>
+      </article>
+    </div>

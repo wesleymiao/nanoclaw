@@ -344,6 +344,16 @@ export class GroupQueue {
     }
   }
 
+  /** @internal - for tests only. Clears all in-memory state so a single
+   * GroupQueue instance can be reused safely across independent test cases. */
+  _resetForTesting(): void {
+    this.groups.clear();
+    this.activeCount = 0;
+    this.waitingGroups = [];
+    this.processMessagesFn = null;
+    this.shuttingDown = false;
+  }
+
   async shutdown(_gracePeriodMs: number): Promise<void> {
     this.shuttingDown = true;
 

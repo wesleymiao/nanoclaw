@@ -1,0 +1,12 @@
+    <p class="section-kicker">1.5 · Scaling</p>
+    <table>
+      <thead><tr><th>Aspect</th><th>Today</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Unit of isolation</strong></td><td>One chat group maps to one folder, one session UUID, one IPC namespace, and at most one running container.</td></tr>
+        <tr><td><strong>Concurrency</strong></td><td><code>MAX_CONCURRENT_CONTAINERS</code> defaults to 5. Additional groups remain in their independent queues.</td></tr>
+        <tr><td><strong>Shared components</strong></td><td>All groups share the host's Docker daemon, copilot-api, image cache, credential stores, NanoClaw process, and SQLite database.</td></tr>
+        <tr><td><strong>What scales naturally</strong></td><td>Workspaces, IPC directories, and Claude session directories are already partitioned by group.</td></tr>
+        <tr><td><strong>Single-host boundary</strong></td><td>Routing state and session registry live in local SQLite; workspaces and transcripts live on the VM disk.</td></tr>
+        <tr><td><strong>Multi-VM path</strong></td><td>Externalize queueing, session registry, and durable storage; then assign a group to one worker at a time with a lease. See the "Walkthroughs" section for a full proposed architecture and end-to-end traces.</td></tr>
+      </tbody>
+    </table>

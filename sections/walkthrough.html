@@ -1,0 +1,514 @@
+    <p class="section-kicker">3.1 · Multi-tenancy Multi-VM Design with Walkthroughs</p>
+    <p class="detail-hint">Proposed target multi-VM architecture — none of this is built yet. Today NanoClaw is single-VM only (in-process queue, local SQLite, local disk, one Docker daemon). Three scenarios below trace the same diagram end-to-end; numbers on each diagram correspond to the numbered list to its right. Click a box in any diagram for its rationale. Background reference material follows the three walkthroughs.</p>
+
+    <h2 style="margin:18px 0 8px">1. Feishu: brand-new conversation</h2>
+    <div class="walkthrough-row">
+    <div class="canvas">
+<svg viewBox="0 0 1420 920" aria-label="NanoClaw proposed multi-VM architecture">
+        <defs>
+          <marker id="mvBlueF" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#58a6ff"/></marker>
+          <marker id="mvGreenF" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#3fb950"/></marker>
+          <marker id="mvOrangeF" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#d29922"/></marker>
+          <marker id="mvPurpleF" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#bc8cff"/></marker>
+          <marker id="mvCyanF" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#79c0ff"/></marker>
+        </defs>
+        <text x="30" y="35" class="section-label" fill="#d29922">Chat &amp; web channels</text>
+
+        <text x="40" y="250" class="section-label" fill="#79c0ff">Shared coordination layer (new)</text>
+        <text x="40" y="405" class="section-label" fill="#3fb950">Worker VM pool (horizontally scalable)</text>
+        <text x="40" y="710" class="section-label" fill="#d29922">Shared durable storage (new)</text>
+
+        <!-- Band 1: Feishu and Web channel side by side, centered as a pair over the coordination layer below -->
+        <g class="node mv-node" data-key="feishu">
+          <rect x="260" y="70" width="440" height="160" rx="12" fill="#161b22" stroke="#d29922" stroke-width="2"/>
+          <text x="480" y="100" text-anchor="middle" class="node-title" font-size="13">Feishu / WeCom / Slack</text>
+          <text x="480" y="126" text-anchor="middle" class="node-sub">bot-app = tenant shard; 1 pinned Container Apps replica</text>
+          <text x="480" y="146" text-anchor="middle" class="node-sub">owns the WS lease</text>
+          <text x="480" y="172" text-anchor="middle" class="node-sub">resolves its own routing key, publishes to queue directly</text>
+          <text x="480" y="192" text-anchor="middle" class="node-sub">— its own ingress</text>
+        </g>
+        <g class="node mv-node" data-key="webChannel">
+          <rect x="740" y="70" width="440" height="160" rx="12" fill="#161b22" stroke="#d29922" stroke-width="2"/>
+          <text x="960" y="100" text-anchor="middle" class="node-title" font-size="13">Web channel (new)</text>
+          <text x="960" y="126" text-anchor="middle" class="node-sub">Container Apps + Front Door · validates its own JWT</text>
+          <text x="960" y="146" text-anchor="middle" class="node-sub">(Entra External ID)</text>
+          <text x="960" y="172" text-anchor="middle" class="node-sub">resolves its own routing key, publishes to queue directly</text>
+          <text x="960" y="192" text-anchor="middle" class="node-sub">— its own ingress</text>
+        </g>
+
+
+        <!-- Band 2: shared coordination layer -->
+        <g class="node mv-node" data-key="queue">
+          <rect x="460" y="270" width="340" height="120" rx="12" fill="#161b22" stroke="#79c0ff" stroke-width="2"/>
+          <text x="630" y="302" text-anchor="middle" class="node-title">Distributed Queue</text>
+          <text x="630" y="326" text-anchor="middle" class="node-sub">Azure Service Bus (session-enabled queues)</text>
+          <text x="630" y="346" text-anchor="middle" class="node-sub">partitioned by tenant_id, ordered per group</text>
+          <text x="630" y="366" text-anchor="middle" class="node-sub">isolates a noisy tenant from the rest</text>
+        </g>
+        <g class="node mv-node" data-key="registry">
+          <rect x="860" y="270" width="280" height="120" rx="12" fill="#161b22" stroke="#bc8cff" stroke-width="2"/>
+          <text x="1000" y="302" text-anchor="middle" class="node-title" font-size="13">Session &amp; Lease Registry</text>
+          <text x="1000" y="326" text-anchor="middle" class="node-sub" font-size="11">Cosmos DB (native TTL leases)</text>
+          <text x="1000" y="346" text-anchor="middle" class="node-sub">(channel, tenant_id, conv) → session UUID</text>
+          <text x="1000" y="366" text-anchor="middle" class="node-sub">+ worker lease (TTL)</text>
+        </g>
+
+        <!-- Band 3: worker VM pool -->
+        <g class="node mv-node" data-key="worker1">
+          <rect x="40" y="470" width="340" height="260" rx="14" fill="#0f1318" stroke="#3fb950" stroke-width="2" stroke-dasharray="8 5"/>
+          <text x="210" y="496" text-anchor="middle" class="node-title" font-size="13">Worker VM 1 · Azure VMSS</text>
+          <rect x="65" y="515" width="290" height="65" rx="9" fill="#161b22" stroke="#3fb950"/>
+          <text x="210" y="542" text-anchor="middle" class="node-sub">NanoClaw runtime + Docker daemon</text>
+          <text x="210" y="560" text-anchor="middle" class="node-sub">long-polls queue → wakes on new lease</text>
+          <rect x="65" y="595" width="290" height="120" rx="9" fill="#161b22" stroke="#3fb950"/>
+          <text x="210" y="614" text-anchor="middle" class="node-sub" font-size="10.5">Disposable group containers · max 5/VM (config limit)</text>
+          <text x="210" y="629" text-anchor="middle" class="node-sub" font-size="10">lease acquired → <tspan fill="#3fb950">docker run</tspan> · idle timeout → <tspan fill="#f85149">docker rm</tspan></text>
+          <rect x="80" y="640" width="46" height="24" rx="4" fill="#3fb950" fill-opacity="0.35" stroke="#3fb950"/>
+          <rect x="132" y="640" width="46" height="24" rx="4" fill="#3fb950" fill-opacity="0.35" stroke="#3fb950"/>
+          <rect x="184" y="640" width="46" height="24" rx="4" fill="#3fb950" fill-opacity="0.35" stroke="#3fb950"/>
+          <rect x="236" y="640" width="46" height="24" rx="4" fill="#3fb950" fill-opacity="0.35" stroke="#3fb950"/>
+          <rect x="288" y="640" width="46" height="24" rx="4" fill="none" stroke="#3fb950" stroke-dasharray="3 3"/>
+          <text x="210" y="656" text-anchor="middle" class="node-sub" font-size="9.5">4 leased groups running · 1 slot free (each square = 1 container)</text>
+          <text x="210" y="700" text-anchor="middle" class="node-sub" font-size="9.5">container ≠ VM: many containers time-share one VM's Docker daemon</text>
+        </g>
+        <g class="node mv-node" data-key="worker2">
+          <rect x="420" y="470" width="340" height="260" rx="14" fill="#0f1318" stroke="#3fb950" stroke-width="2" stroke-dasharray="8 5"/>
+          <text x="590" y="496" text-anchor="middle" class="node-title" font-size="13">Worker VM 2 · Azure VMSS</text>
+          <rect x="445" y="515" width="290" height="65" rx="9" fill="#161b22" stroke="#3fb950"/>
+          <text x="590" y="542" text-anchor="middle" class="node-sub">NanoClaw runtime + Docker daemon</text>
+          <text x="590" y="560" text-anchor="middle" class="node-sub">long-polls queue → wakes on new lease</text>
+          <rect x="445" y="595" width="290" height="120" rx="9" fill="#161b22" stroke="#3fb950"/>
+          <text x="590" y="629" text-anchor="middle" class="node-sub">Disposable group containers · max 5/VM</text>
+          <text x="590" y="650" text-anchor="middle" class="node-sub">same lease → docker run → docker rm pattern as VM 1</text>
+          <text x="590" y="670" text-anchor="middle" class="node-sub" font-size="9.5">(slot usage varies independently per VM)</text>
+        </g>
+        <g class="node mv-node" data-key="workerN">
+          <rect x="800" y="470" width="340" height="260" rx="14" fill="#0f1318" stroke="#3fb950" stroke-width="2" stroke-dasharray="8 5"/>
+          <text x="970" y="496" text-anchor="middle" class="node-title" font-size="13">Worker VM N · Azure VMSS</text>
+          <rect x="825" y="515" width="290" height="65" rx="9" fill="#161b22" stroke="#3fb950"/>
+          <text x="970" y="542" text-anchor="middle" class="node-sub">NanoClaw runtime + Docker daemon</text>
+          <text x="970" y="560" text-anchor="middle" class="node-sub">long-polls queue → wakes on new lease</text>
+          <rect x="825" y="595" width="290" height="120" rx="9" fill="#161b22" stroke="#3fb950"/>
+          <text x="970" y="629" text-anchor="middle" class="node-sub">Disposable group containers · max 5/VM</text>
+          <text x="970" y="650" text-anchor="middle" class="node-sub">same lease → docker run → docker rm pattern as VM 1</text>
+          <text x="970" y="670" text-anchor="middle" class="node-sub" font-size="9.5">VM added/removed only when the pool as a whole saturates</text>
+        </g>
+
+        <!-- Band 4: shared durable storage, full width footer -->
+        <g class="node mv-node" data-key="storage">
+          <rect x="40" y="770" width="1340" height="110" rx="12" fill="#161b22" stroke="#d29922" stroke-width="2"/>
+          <text x="65" y="798" class="node-title">Shared durable storage</text>
+          <text x="65" y="818" class="node-sub">Azure Files (Premium SMB/NFS) or Azure NetApp Files, private endpoint</text>
+          <text x="65" y="836" class="node-sub">group workspaces · Claude session transcripts (JSONL) · IPC directories</text>
+          <text x="65" y="854" class="node-sub">any worker can pick up any group's files after acquiring its lease</text>
+        </g>
+
+
+
+        <!-- Feishu/Web -> queue/registry: each channel app resolves routing + publishes itself (no Ingress hop). Both boxes exit from the bottom edge into the clear gap between Band 1 and Band 2, then bend into Queue/Registry -- keeps the two channels' side-by-side boxes from crossing each other. -->
+        <path class="flow mv-flow" d="M480,230 L480,252 L630,252 L630,270" fill="none" stroke="#d29922" stroke-width="2.5" marker-end="url(#mvOrangeF)"/>
+        <path class="flow mv-flow" d="M620,230 L620,244 L990,244 L990,270" fill="none" stroke="#d29922" stroke-width="2" marker-end="url(#mvOrangeF)"/>
+        <path class="flow mv-flow" d="M760,230 L760,260 L700,260 L700,270" fill="none" stroke="#d29922" stroke-width="2.5" stroke-dasharray="5 3" marker-end="url(#mvOrangeF)"/>
+        <path class="flow mv-flow" d="M960,230 L960,236 L1120,236 L1120,270" fill="none" stroke="#d29922" stroke-width="2" stroke-dasharray="5 3" marker-end="url(#mvOrangeF)"/>
+        <text x="485" y="249" class="edge-label" font-size="10">Feishu: publish, direct</text>
+        <text x="705" y="257" class="edge-label" font-size="10">Web: publish, direct (dashed)</text>
+
+        <!-- Queue -> workers, orthogonal bus through a widened 390-470 corridor (kept well clear of the section label above and the box tops below) -->
+        <path class="flow mv-flow" d="M630,390 L630,425 L210,425 L210,470" fill="none" stroke="#79c0ff" stroke-width="2.5" marker-end="url(#mvCyanF)"/>
+        <path class="flow mv-flow" d="M630,390 L630,425 L590,425 L590,470" fill="none" stroke="#79c0ff" stroke-width="2.5" marker-end="url(#mvCyanF)"/>
+        <path class="flow mv-flow" d="M630,390 L630,425 L970,425 L970,470" fill="none" stroke="#79c0ff" stroke-width="2.5" marker-end="url(#mvCyanF)"/>
+        <text x="30" y="421" class="edge-label">long-poll (blocking receive) wakes worker</text>
+
+        <!-- Registry -> workers, second parallel bus, given its own row well below the queue bus -->
+        <path class="flow mv-flow" d="M1000,390 L1000,450 L235,450 L235,470" fill="none" stroke="#bc8cff" stroke-width="2" stroke-dasharray="3 4" marker-end="url(#mvPurpleF)"/>
+        <path class="flow mv-flow" d="M1000,390 L1000,450 L615,450 L615,470" fill="none" stroke="#bc8cff" stroke-width="2" stroke-dasharray="3 4" marker-end="url(#mvPurpleF)"/>
+        <path class="flow mv-flow" d="M1000,390 L1000,450 L995,450 L995,470" fill="none" stroke="#bc8cff" stroke-width="2" stroke-dasharray="3 4" marker-end="url(#mvPurpleF)"/>
+        <text x="1010" y="446" class="edge-label">lease TTL / session UUID</text>
+
+
+        <!-- Workers -> shared storage -->
+        <line class="flow mv-flow" x1="210" y1="730" x2="210" y2="770" stroke="#d29922" stroke-width="2" marker-end="url(#mvOrangeF)"/>
+        <line class="flow mv-flow" x1="590" y1="730" x2="590" y2="770" stroke="#d29922" stroke-width="2" marker-end="url(#mvOrangeF)"/>
+        <line class="flow mv-flow" x1="970" y1="730" x2="970" y2="770" stroke="#d29922" stroke-width="2" marker-end="url(#mvOrangeF)"/>
+        <text x="235" y="766" class="edge-label">read/write workspace, transcripts, IPC</text>
+      
+        <!-- Worker -> Feishu/Web directly: streamed reply path. Feishu enters via the clear left margin (x0-40, never crosses a box); Web now sits away from the margin, so its reply enters via the bottom edge through the same open gap the publish arrows use. Each channel app subscribes to its own pub/sub-by-conversation_id channel and relays events straight to its own pinned socket -- no separate Ingress relay hop. -->
+        <path class="flow mv-flow" d="M40,485 L14,485 L14,150 L260,150" fill="none" stroke="#3fb950" stroke-width="2.5" stroke-dasharray="2 3" marker-end="url(#mvGreenF)"/>
+        <path class="flow mv-flow" d="M1140,485 L1400,485 L1400,150 L1180,150" fill="none" stroke="#3fb950" stroke-width="2.5" stroke-dasharray="2 3" marker-end="url(#mvGreenF)"/>
+        <text x="18" y="145" class="edge-label" font-size="10">streamed reply (Redis Pub/Sub)</text>
+        <text x="1230" y="145" class="edge-label" font-size="10" text-anchor="end">streamed reply (Redis Pub/Sub)</text>
+      
+        <!-- Numbered walkthrough steps, drawn last so they sit on top of all boxes/arrows, placed in empty corners to avoid covering box text -->
+        <g class="step-marker"><circle cx="480" cy="90" r="15" fill="#f85149" stroke="#f0f6fc" stroke-width="2"/><text x="480" y="95" text-anchor="middle" font-size="15" font-weight="800" fill="#ffffff">1</text></g>
+        <g class="step-marker"><circle cx="480" cy="150" r="15" fill="#f85149" stroke="#f0f6fc" stroke-width="2"/><text x="480" y="155" text-anchor="middle" font-size="15" font-weight="800" fill="#ffffff">2</text></g>
+        <g class="step-marker"><circle cx="785" cy="285" r="15" fill="#f85149" stroke="#f0f6fc" stroke-width="2"/><text x="785" y="290" text-anchor="middle" font-size="15" font-weight="800" fill="#ffffff">3</text></g>
+        <g class="step-marker"><circle cx="1125" cy="285" r="15" fill="#f85149" stroke="#f0f6fc" stroke-width="2"/><text x="1125" y="290" text-anchor="middle" font-size="15" font-weight="800" fill="#ffffff">4</text></g>
+        <g class="step-marker"><circle cx="630" cy="425" r="15" fill="#f85149" stroke="#f0f6fc" stroke-width="2"/><text x="630" y="430" text-anchor="middle" font-size="15" font-weight="800" fill="#ffffff">5</text></g>
+        <g class="step-marker"><circle cx="355" cy="485" r="15" fill="#f85149" stroke="#f0f6fc" stroke-width="2"/><text x="355" y="490" text-anchor="middle" font-size="15" font-weight="800" fill="#ffffff">6</text></g>
+        <g class="step-marker"><circle cx="1300" cy="800" r="15" fill="#f85149" stroke="#f0f6fc" stroke-width="2"/><text x="1300" y="805" text-anchor="middle" font-size="15" font-weight="800" fill="#ffffff">7</text></g>
+        <g class="step-marker"><circle cx="260" cy="150" r="15" fill="#f85149" stroke="#f0f6fc" stroke-width="2"/><text x="260" y="155" text-anchor="middle" font-size="15" font-weight="800" fill="#ffffff">8</text></g>
+        <g class="step-marker"><circle cx="355" cy="715" r="15" fill="#f85149" stroke="#f0f6fc" stroke-width="2"/><text x="355" y="720" text-anchor="middle" font-size="15" font-weight="800" fill="#ffffff">9</text></g>
+      </svg>
+    </div>
+    <div class="steps-col">
+      <article class="card good"><h2>Steps 1–9: brand-new Feishu conversation</h2><ol>
+        <li><strong>Feishu box</strong> — a user starts a brand-new conversation; the message arrives over the app's persistent WS connection, delivered to the one pinned Container Apps replica that owns that lease.</li>
+        <li><strong>Feishu box (its own ingress)</strong> — resolves <code>(channel=feishu, tenant_id=app_id, conversation_id=chat_id)</code> → a brand-new group (no prior entry exists yet), then publishes the event directly to the queue itself (does not process it, and there's no separate Ingress hop).</li>
+        <li><strong>Queue</strong> — event lands in the Service Bus session-enabled queue as a brand-new session, partitioned by <code>tenant_id</code> (the Feishu app).</li>
+        <li><strong>Registry</strong> — looked up for this conversation and found empty: no session UUID or worker lease exists yet.</li>
+        <li><strong>Any worker's long-poll</strong> — because this session is brand-new, whichever worker's blocking receive call returns first wins the race and accepts it, acquiring the registry lease and dequeuing the message. Accepting a session grants an <em>exclusive lock</em>, not just one message: this worker keeps its receive loop for that session open (renewing the lock) for as long as the container stays warm, so every later message in this conversation lands straight back on this same worker — see Walkthrough 2 for exactly how that follow-up path works.</li>
+        <li><strong>Container spin-up</strong> — that worker runs a fresh <code>docker run</code> for this brand-new group (there's nothing to reuse yet), consuming one of its 5 concurrency slots.</li>
+        <li><strong>Storage</strong> — the container creates the group's shared workspace, JSONL transcript, and IPC directory for the first time.</li>
+        <li><strong>Reply path (streamed, not one-shot)</strong> — a single turn is not one reply: Claude Code emits a running sequence of events — reasoning chunks, tool-call-started, tool-call-result, partial text — and agent-runner flushes each one to the group's IPC output directory as it happens. The worker doesn't know or care which of N Feishu-app replicas is running — it just publishes each event to a pub/sub channel keyed by <code>conversation_id</code>. Only the one Feishu-app replica that registered the WS lease for that <code>conversation_id</code> (in Azure Cache for Redis, at connection time) is subscribed to that exact channel, so only it receives the events and relays them, in order, to the pinned Feishu WS connection — no separate Ingress process is involved — the chat sees live "using tool X…" / "thinking…" updates before the final answer, not a single blocking wait.</li>
+        <li><strong>Idle teardown</strong> — after ~30 minutes idle with no follow-up, <code>docker rm</code> frees the slot and the worker explicitly completes/closes the Service Bus session, releasing the sticky lock from step 5 so a future message can go to any worker.</li>
+      </ol></article>
+    </div>
+    </div>
+
+<h2 style="margin:28px 0 8px">2. Feishu: follow-up message (existing conversation)</h2>
+    <div class="walkthrough-row">
+    <div class="canvas">
+<svg viewBox="0 0 1420 920" aria-label="NanoClaw proposed multi-VM architecture">
+        <defs>
+          <marker id="mvBlueF2" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#58a6ff"/></marker>
+          <marker id="mvGreenF2" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#3fb950"/></marker>
+          <marker id="mvOrangeF2" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#d29922"/></marker>
+          <marker id="mvPurpleF2" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#bc8cff"/></marker>
+          <marker id="mvCyanF2" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#79c0ff"/></marker>
+        </defs>
+        <text x="30" y="35" class="section-label" fill="#d29922">Chat &amp; web channels</text>
+
+        <text x="40" y="250" class="section-label" fill="#79c0ff">Shared coordination layer (new)</text>
+        <text x="40" y="405" class="section-label" fill="#3fb950">Worker VM pool (horizontally scalable)</text>
+        <text x="40" y="710" class="section-label" fill="#d29922">Shared durable storage (new)</text>
+
+        <!-- Band 1: Feishu and Web channel side by side, centered as a pair over the coordination layer below -->
+        <g class="node mv-node" data-key="feishu">
+          <rect x="260" y="70" width="440" height="160" rx="12" fill="#161b22" stroke="#d29922" stroke-width="2"/>
+          <text x="480" y="100" text-anchor="middle" class="node-title" font-size="13">Feishu / WeCom / Slack</text>
+          <text x="480" y="126" text-anchor="middle" class="node-sub">bot-app = tenant shard; 1 pinned Container Apps replica</text>
+          <text x="480" y="146" text-anchor="middle" class="node-sub">owns the WS lease</text>
+          <text x="480" y="172" text-anchor="middle" class="node-sub">resolves its own routing key, publishes to queue directly</text>
+          <text x="480" y="192" text-anchor="middle" class="node-sub">— its own ingress</text>
+        </g>
+        <g class="node mv-node" data-key="webChannel">
+          <rect x="740" y="70" width="440" height="160" rx="12" fill="#161b22" stroke="#d29922" stroke-width="2"/>
+          <text x="960" y="100" text-anchor="middle" class="node-title" font-size="13">Web channel (new)</text>
+          <text x="960" y="126" text-anchor="middle" class="node-sub">Container Apps + Front Door · validates its own JWT</text>
+          <text x="960" y="146" text-anchor="middle" class="node-sub">(Entra External ID)</text>
+          <text x="960" y="172" text-anchor="middle" class="node-sub">resolves its own routing key, publishes to queue directly</text>
+          <text x="960" y="192" text-anchor="middle" class="node-sub">— its own ingress</text>
+        </g>
+
+
+        <!-- Band 2: shared coordination layer -->
+        <g class="node mv-node" data-key="queue">
+          <rect x="460" y="270" width="340" height="120" rx="12" fill="#161b22" stroke="#79c0ff" stroke-width="2"/>
+          <text x="630" y="302" text-anchor="middle" class="node-title">Distributed Queue</text>
+          <text x="630" y="326" text-anchor="middle" class="node-sub">Azure Service Bus (session-enabled queues)</text>
+          <text x="630" y="346" text-anchor="middle" class="node-sub">partitioned by tenant_id, ordered per group</text>
+          <text x="630" y="366" text-anchor="middle" class="node-sub">isolates a noisy tenant from the rest</text>
+        </g>
+        <g class="node mv-node" data-key="registry">
+          <rect x="860" y="270" width="280" height="120" rx="12" fill="#161b22" stroke="#bc8cff" stroke-width="2"/>
+          <text x="1000" y="302" text-anchor="middle" class="node-title" font-size="13">Session &amp; Lease Registry</text>
+          <text x="1000" y="326" text-anchor="middle" class="node-sub" font-size="11">Cosmos DB (native TTL leases)</text>
+          <text x="1000" y="346" text-anchor="middle" class="node-sub">(channel, tenant_id, conv) → session UUID</text>
+          <text x="1000" y="366" text-anchor="middle" class="node-sub">+ worker lease (TTL)</text>
+        </g>
+
+        <!-- Band 3: worker VM pool -->
+        <g class="node mv-node" data-key="worker1">
+          <rect x="40" y="470" width="340" height="260" rx="14" fill="#0f1318" stroke="#3fb950" stroke-width="2" stroke-dasharray="8 5"/>
+          <text x="210" y="496" text-anchor="middle" class="node-title" font-size="13">Worker VM 1 · Azure VMSS</text>
+          <rect x="65" y="515" width="290" height="65" rx="9" fill="#161b22" stroke="#3fb950"/>
+          <text x="210" y="542" text-anchor="middle" class="node-sub">NanoClaw runtime + Docker daemon</text>
+          <text x="210" y="560" text-anchor="middle" class="node-sub">long-polls queue → wakes on new lease</text>
+          <rect x="65" y="595" width="290" height="120" rx="9" fill="#161b22" stroke="#3fb950"/>
+          <text x="210" y="614" text-anchor="middle" class="node-sub" font-size="10.5">Disposable group containers · max 5/VM (config limit)</text>
+          <text x="210" y="629" text-anchor="middle" class="node-sub" font-size="10">lease acquired → <tspan fill="#3fb950">docker run</tspan> · idle timeout → <tspan fill="#f85149">docker rm</tspan></text>
+          <rect x="80" y="640" width="46" height="24" rx="4" fill="#3fb950" fill-opacity="0.35" stroke="#3fb950"/>
+          <rect x="132" y="640" width="46" height="24" rx="4" fill="#3fb950" fill-opacity="0.35" stroke="#3fb950"/>
+          <rect x="184" y="640" width="46" height="24" rx="4" fill="#3fb950" fill-opacity="0.35" stroke="#3fb950"/>
+          <rect x="236" y="640" width="46" height="24" rx="4" fill="#3fb950" fill-opacity="0.35" stroke="#3fb950"/>
+          <rect x="288" y="640" width="46" height="24" rx="4" fill="none" stroke="#3fb950" stroke-dasharray="3 3"/>
+          <text x="210" y="656" text-anchor="middle" class="node-sub" font-size="9.5">4 leased groups running · 1 slot free (each square = 1 container)</text>
+          <text x="210" y="700" text-anchor="middle" class="node-sub" font-size="9.5">container ≠ VM: many containers time-share one VM's Docker daemon</text>
+        </g>
+        <g class="node mv-node" data-key="worker2">
+          <rect x="420" y="470" width="340" height="260" rx="14" fill="#0f1318" stroke="#3fb950" stroke-width="2" stroke-dasharray="8 5"/>
+          <text x="590" y="496" text-anchor="middle" class="node-title" font-size="13">Worker VM 2 · Azure VMSS</text>
+          <rect x="445" y="515" width="290" height="65" rx="9" fill="#161b22" stroke="#3fb950"/>
+          <text x="590" y="542" text-anchor="middle" class="node-sub">NanoClaw runtime + Docker daemon</text>
+          <text x="590" y="560" text-anchor="middle" class="node-sub">long-polls queue → wakes on new lease</text>
+          <rect x="445" y="595" width="290" height="120" rx="9" fill="#161b22" stroke="#3fb950"/>
+          <text x="590" y="629" text-anchor="middle" class="node-sub">Disposable group containers · max 5/VM</text>
+          <text x="590" y="650" text-anchor="middle" class="node-sub">same lease → docker run → docker rm pattern as VM 1</text>
+          <text x="590" y="670" text-anchor="middle" class="node-sub" font-size="9.5">(slot usage varies independently per VM)</text>
+        </g>
+        <g class="node mv-node" data-key="workerN">
+          <rect x="800" y="470" width="340" height="260" rx="14" fill="#0f1318" stroke="#3fb950" stroke-width="2" stroke-dasharray="8 5"/>
+          <text x="970" y="496" text-anchor="middle" class="node-title" font-size="13">Worker VM N · Azure VMSS</text>
+          <rect x="825" y="515" width="290" height="65" rx="9" fill="#161b22" stroke="#3fb950"/>
+          <text x="970" y="542" text-anchor="middle" class="node-sub">NanoClaw runtime + Docker daemon</text>
+          <text x="970" y="560" text-anchor="middle" class="node-sub">long-polls queue → wakes on new lease</text>
+          <rect x="825" y="595" width="290" height="120" rx="9" fill="#161b22" stroke="#3fb950"/>
+          <text x="970" y="629" text-anchor="middle" class="node-sub">Disposable group containers · max 5/VM</text>
+          <text x="970" y="650" text-anchor="middle" class="node-sub">same lease → docker run → docker rm pattern as VM 1</text>
+          <text x="970" y="670" text-anchor="middle" class="node-sub" font-size="9.5">VM added/removed only when the pool as a whole saturates</text>
+        </g>
+
+        <!-- Band 4: shared durable storage, full width footer -->
+        <g class="node mv-node" data-key="storage">
+          <rect x="40" y="770" width="1340" height="110" rx="12" fill="#161b22" stroke="#d29922" stroke-width="2"/>
+          <text x="65" y="798" class="node-title">Shared durable storage</text>
+          <text x="65" y="818" class="node-sub">Azure Files (Premium SMB/NFS) or Azure NetApp Files, private endpoint</text>
+          <text x="65" y="836" class="node-sub">group workspaces · Claude session transcripts (JSONL) · IPC directories</text>
+          <text x="65" y="854" class="node-sub">any worker can pick up any group's files after acquiring its lease</text>
+        </g>
+
+
+
+        <!-- Feishu/Web -> queue/registry: each channel app resolves routing + publishes itself (no Ingress hop). Both boxes exit from the bottom edge into the clear gap between Band 1 and Band 2, then bend into Queue/Registry -- keeps the two channels' side-by-side boxes from crossing each other. -->
+        <path class="flow mv-flow" d="M480,230 L480,252 L630,252 L630,270" fill="none" stroke="#d29922" stroke-width="2.5" marker-end="url(#mvOrangeF2)"/>
+        <path class="flow mv-flow" d="M620,230 L620,244 L990,244 L990,270" fill="none" stroke="#d29922" stroke-width="2" marker-end="url(#mvOrangeF2)"/>
+        <path class="flow mv-flow" d="M760,230 L760,260 L700,260 L700,270" fill="none" stroke="#d29922" stroke-width="2.5" stroke-dasharray="5 3" marker-end="url(#mvOrangeF2)"/>
+        <path class="flow mv-flow" d="M960,230 L960,236 L1120,236 L1120,270" fill="none" stroke="#d29922" stroke-width="2" stroke-dasharray="5 3" marker-end="url(#mvOrangeF2)"/>
+        <text x="485" y="249" class="edge-label" font-size="10">Feishu: publish, direct</text>
+        <text x="705" y="257" class="edge-label" font-size="10">Web: publish, direct (dashed)</text>
+
+        <!-- Queue -> workers, orthogonal bus through a widened 390-470 corridor (kept well clear of the section label above and the box tops below) -->
+        <path class="flow mv-flow" d="M630,390 L630,425 L210,425 L210,470" fill="none" stroke="#79c0ff" stroke-width="2.5" marker-end="url(#mvCyanF2)"/>
+        <path class="flow mv-flow" d="M630,390 L630,425 L590,425 L590,470" fill="none" stroke="#79c0ff" stroke-width="2.5" marker-end="url(#mvCyanF2)"/>
+        <path class="flow mv-flow" d="M630,390 L630,425 L970,425 L970,470" fill="none" stroke="#79c0ff" stroke-width="2.5" marker-end="url(#mvCyanF2)"/>
+        <text x="30" y="421" class="edge-label">long-poll (blocking receive) wakes worker</text>
+
+        <!-- Registry -> workers, second parallel bus, given its own row well below the queue bus -->
+        <path class="flow mv-flow" d="M1000,390 L1000,450 L235,450 L235,470" fill="none" stroke="#bc8cff" stroke-width="2" stroke-dasharray="3 4" marker-end="url(#mvPurpleF2)"/>
+        <path class="flow mv-flow" d="M1000,390 L1000,450 L615,450 L615,470" fill="none" stroke="#bc8cff" stroke-width="2" stroke-dasharray="3 4" marker-end="url(#mvPurpleF2)"/>
+        <path class="flow mv-flow" d="M1000,390 L1000,450 L995,450 L995,470" fill="none" stroke="#bc8cff" stroke-width="2" stroke-dasharray="3 4" marker-end="url(#mvPurpleF2)"/>
+        <text x="1010" y="446" class="edge-label">lease TTL / session UUID</text>
+
+
+        <!-- Workers -> shared storage -->
+        <line class="flow mv-flow" x1="210" y1="730" x2="210" y2="770" stroke="#d29922" stroke-width="2" marker-end="url(#mvOrangeF2)"/>
+        <line class="flow mv-flow" x1="590" y1="730" x2="590" y2="770" stroke="#d29922" stroke-width="2" marker-end="url(#mvOrangeF2)"/>
+        <line class="flow mv-flow" x1="970" y1="730" x2="970" y2="770" stroke="#d29922" stroke-width="2" marker-end="url(#mvOrangeF2)"/>
+        <text x="235" y="766" class="edge-label">read/write workspace, transcripts, IPC</text>
+      
+        <!-- Worker -> Feishu/Web directly: streamed reply path. Feishu enters via the clear left margin (x0-40, never crosses a box); Web now sits away from the margin, so its reply enters via the bottom edge through the same open gap the publish arrows use. Each channel app subscribes to its own pub/sub-by-conversation_id channel and relays events straight to its own pinned socket -- no separate Ingress relay hop. -->
+        <path class="flow mv-flow" d="M40,485 L14,485 L14,150 L260,150" fill="none" stroke="#3fb950" stroke-width="2.5" stroke-dasharray="2 3" marker-end="url(#mvGreenF2)"/>
+        <path class="flow mv-flow" d="M1140,485 L1400,485 L1400,150 L1180,150" fill="none" stroke="#3fb950" stroke-width="2.5" stroke-dasharray="2 3" marker-end="url(#mvGreenF2)"/>
+        <text x="18" y="145" class="edge-label" font-size="10">streamed reply (Redis Pub/Sub)</text>
+        <text x="1230" y="145" class="edge-label" font-size="10" text-anchor="end">streamed reply (Redis Pub/Sub)</text>
+      
+        <!-- Numbered walkthrough steps, drawn last so they sit on top of all boxes/arrows, placed in empty corners to avoid covering box text -->
+        <g class="step-marker"><circle cx="480" cy="90" r="15" fill="#f85149" stroke="#f0f6fc" stroke-width="2"/><text x="480" y="95" text-anchor="middle" font-size="15" font-weight="800" fill="#ffffff">1</text></g>
+        <g class="step-marker"><circle cx="480" cy="150" r="15" fill="#f85149" stroke="#f0f6fc" stroke-width="2"/><text x="480" y="155" text-anchor="middle" font-size="15" font-weight="800" fill="#ffffff">2</text></g>
+        <g class="step-marker"><circle cx="785" cy="285" r="15" fill="#f85149" stroke="#f0f6fc" stroke-width="2"/><text x="785" y="290" text-anchor="middle" font-size="15" font-weight="800" fill="#ffffff">3</text></g>
+        <g class="step-marker"><circle cx="1125" cy="285" r="15" fill="#f85149" stroke="#f0f6fc" stroke-width="2"/><text x="1125" y="290" text-anchor="middle" font-size="15" font-weight="800" fill="#ffffff">4</text></g>
+        <g class="step-marker"><circle cx="630" cy="425" r="15" fill="#f85149" stroke="#f0f6fc" stroke-width="2"/><text x="630" y="430" text-anchor="middle" font-size="15" font-weight="800" fill="#ffffff">5</text></g>
+        <g class="step-marker"><circle cx="355" cy="485" r="15" fill="#f85149" stroke="#f0f6fc" stroke-width="2"/><text x="355" y="490" text-anchor="middle" font-size="15" font-weight="800" fill="#ffffff">6</text></g>
+        <g class="step-marker"><circle cx="1300" cy="800" r="15" fill="#f85149" stroke="#f0f6fc" stroke-width="2"/><text x="1300" y="805" text-anchor="middle" font-size="15" font-weight="800" fill="#ffffff">7</text></g>
+        <g class="step-marker"><circle cx="260" cy="150" r="15" fill="#f85149" stroke="#f0f6fc" stroke-width="2"/><text x="260" y="155" text-anchor="middle" font-size="15" font-weight="800" fill="#ffffff">8</text></g>
+        <g class="step-marker"><circle cx="355" cy="715" r="15" fill="#f85149" stroke="#f0f6fc" stroke-width="2"/><text x="355" y="720" text-anchor="middle" font-size="15" font-weight="800" fill="#ffffff">9</text></g>
+      </svg>
+    </div>
+    <div class="steps-col">
+      <article class="card good"><h2>Steps 1–9: Feishu follow-up message</h2><ol>
+        <li><strong>Feishu box</strong> — the user sends a follow-up message in the SAME chat, delivered to the same pinned Container Apps replica that owns the WS lease.</li>
+        <li><strong>Feishu box (its own ingress)</strong> — resolves the same <code>(channel=feishu, tenant_id=app_id, conversation_id=chat_id)</code> key as the earlier message in this conversation and publishes to the queue.</li>
+        <li><strong>Queue</strong> — event lands in the SAME Service Bus session as before — a session that is still open and exclusively locked by the worker that has been handling this conversation.</li>
+        <li><strong>Registry</strong> — the lease entry already shows this conversation's owning worker from the earlier message, still within its TTL — no new lease is created.</li>
+        <li><strong>Same worker, sticky session lock</strong> — mechanically: back when this conversation started, Worker A called <code>AcceptNextSessionAsync()</code>, which returned a session receiver bound to this exact <code>SessionId</code> (= the group key) and told Service Bus to lock it server-side. Worker A has been looping <code>ReceiveMessagesAsync()</code> + <code>RenewSessionLockAsync()</code> on that receiver ever since — even through gaps with nothing to receive — which is what keeps the lock alive through the container's 30-minute idle window. Because the lock is still held, this new message (same <code>SessionId</code>) is simply the next item Worker A's already-running <code>ReceiveMessagesAsync()</code> call picks up — no new accept, no lookup. Any other worker calling <code>AcceptNextSessionAsync()</code> never even sees this session offered, since Service Bus filters out locked sessions before offering them — so unlike Walkthrough 1's brand-new conversation, there's no "whichever worker wins" race this time.</li>
+        <li><strong>Container reuse (no docker run)</strong> — the worker finds its existing container for this group still running and forwards the new prompt to it over IPC, passing the conversation's ongoing Claude session UUID — no new container, no new slot consumed.</li>
+        <li><strong>Storage</strong> — the container appends to the SAME shared workspace/transcript/IPC directory it was already using; nothing about the file layout changes.</li>
+        <li><strong>Reply path (streamed, not one-shot)</strong> — same as Walkthrough 1: the worker publishes each event to the pub/sub channel keyed by <code>conversation_id</code>; whichever Feishu-app replica holds the WS lease for that conversation relays the events, in order, back to the pinned WS connection.</li>
+        <li><strong>Idle timer resets, no teardown this cycle</strong> — because a new message arrived before the 30-minute idle timeout fired, both the container and the sticky session lock stay alive, extending the window; teardown (and lock release) only happens if this conversation later goes quiet for a full 30 minutes.</li>
+      </ol></article>
+    </div>
+    </div>
+
+    <h2 style="margin:28px 0 8px">3. Web channel: follow-up message</h2>
+    <div class="walkthrough-row">
+    <div class="canvas">
+<svg viewBox="0 0 1420 920" aria-label="NanoClaw proposed multi-VM architecture">
+        <defs>
+          <marker id="mvBlueW" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#58a6ff"/></marker>
+          <marker id="mvGreenW" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#3fb950"/></marker>
+          <marker id="mvOrangeW" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#d29922"/></marker>
+          <marker id="mvPurpleW" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#bc8cff"/></marker>
+          <marker id="mvCyanW" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#79c0ff"/></marker>
+        </defs>
+        <text x="30" y="35" class="section-label" fill="#d29922">Chat &amp; web channels</text>
+
+        <text x="40" y="250" class="section-label" fill="#79c0ff">Shared coordination layer (new)</text>
+        <text x="40" y="405" class="section-label" fill="#3fb950">Worker VM pool (horizontally scalable)</text>
+        <text x="40" y="710" class="section-label" fill="#d29922">Shared durable storage (new)</text>
+
+        <!-- Band 1: Feishu and Web channel side by side, centered as a pair over the coordination layer below -->
+        <g class="node mv-node" data-key="feishu">
+          <rect x="260" y="70" width="440" height="160" rx="12" fill="#161b22" stroke="#d29922" stroke-width="2"/>
+          <text x="480" y="100" text-anchor="middle" class="node-title" font-size="13">Feishu / WeCom / Slack</text>
+          <text x="480" y="126" text-anchor="middle" class="node-sub">bot-app = tenant shard; 1 pinned Container Apps replica</text>
+          <text x="480" y="146" text-anchor="middle" class="node-sub">owns the WS lease</text>
+          <text x="480" y="172" text-anchor="middle" class="node-sub">resolves its own routing key, publishes to queue directly</text>
+          <text x="480" y="192" text-anchor="middle" class="node-sub">— its own ingress</text>
+        </g>
+        <g class="node mv-node" data-key="webChannel">
+          <rect x="740" y="70" width="440" height="160" rx="12" fill="#161b22" stroke="#d29922" stroke-width="2"/>
+          <text x="960" y="100" text-anchor="middle" class="node-title" font-size="13">Web channel (new)</text>
+          <text x="960" y="126" text-anchor="middle" class="node-sub">Container Apps + Front Door · validates its own JWT</text>
+          <text x="960" y="146" text-anchor="middle" class="node-sub">(Entra External ID)</text>
+          <text x="960" y="172" text-anchor="middle" class="node-sub">resolves its own routing key, publishes to queue directly</text>
+          <text x="960" y="192" text-anchor="middle" class="node-sub">— its own ingress</text>
+        </g>
+
+
+        <!-- Band 2: shared coordination layer -->
+        <g class="node mv-node" data-key="queue">
+          <rect x="460" y="270" width="340" height="120" rx="12" fill="#161b22" stroke="#79c0ff" stroke-width="2"/>
+          <text x="630" y="302" text-anchor="middle" class="node-title">Distributed Queue</text>
+          <text x="630" y="326" text-anchor="middle" class="node-sub">Azure Service Bus (session-enabled queues)</text>
+          <text x="630" y="346" text-anchor="middle" class="node-sub">partitioned by tenant_id, ordered per group</text>
+          <text x="630" y="366" text-anchor="middle" class="node-sub">isolates a noisy tenant from the rest</text>
+        </g>
+        <g class="node mv-node" data-key="registry">
+          <rect x="860" y="270" width="280" height="120" rx="12" fill="#161b22" stroke="#bc8cff" stroke-width="2"/>
+          <text x="1000" y="302" text-anchor="middle" class="node-title" font-size="13">Session &amp; Lease Registry</text>
+          <text x="1000" y="326" text-anchor="middle" class="node-sub" font-size="11">Cosmos DB (native TTL leases)</text>
+          <text x="1000" y="346" text-anchor="middle" class="node-sub">(channel, tenant_id, conv) → session UUID</text>
+          <text x="1000" y="366" text-anchor="middle" class="node-sub">+ worker lease (TTL)</text>
+        </g>
+
+        <!-- Band 3: worker VM pool -->
+        <g class="node mv-node" data-key="worker1">
+          <rect x="40" y="470" width="340" height="260" rx="14" fill="#0f1318" stroke="#3fb950" stroke-width="2" stroke-dasharray="8 5"/>
+          <text x="210" y="496" text-anchor="middle" class="node-title" font-size="13">Worker VM 1 · Azure VMSS</text>
+          <rect x="65" y="515" width="290" height="65" rx="9" fill="#161b22" stroke="#3fb950"/>
+          <text x="210" y="542" text-anchor="middle" class="node-sub">NanoClaw runtime + Docker daemon</text>
+          <text x="210" y="560" text-anchor="middle" class="node-sub">long-polls queue → wakes on new lease</text>
+          <rect x="65" y="595" width="290" height="120" rx="9" fill="#161b22" stroke="#3fb950"/>
+          <text x="210" y="614" text-anchor="middle" class="node-sub" font-size="10.5">Disposable group containers · max 5/VM (config limit)</text>
+          <text x="210" y="629" text-anchor="middle" class="node-sub" font-size="10">lease acquired → <tspan fill="#3fb950">docker run</tspan> · idle timeout → <tspan fill="#f85149">docker rm</tspan></text>
+          <rect x="80" y="640" width="46" height="24" rx="4" fill="#3fb950" fill-opacity="0.35" stroke="#3fb950"/>
+          <rect x="132" y="640" width="46" height="24" rx="4" fill="#3fb950" fill-opacity="0.35" stroke="#3fb950"/>
+          <rect x="184" y="640" width="46" height="24" rx="4" fill="#3fb950" fill-opacity="0.35" stroke="#3fb950"/>
+          <rect x="236" y="640" width="46" height="24" rx="4" fill="#3fb950" fill-opacity="0.35" stroke="#3fb950"/>
+          <rect x="288" y="640" width="46" height="24" rx="4" fill="none" stroke="#3fb950" stroke-dasharray="3 3"/>
+          <text x="210" y="656" text-anchor="middle" class="node-sub" font-size="9.5">4 leased groups running · 1 slot free (each square = 1 container)</text>
+          <text x="210" y="700" text-anchor="middle" class="node-sub" font-size="9.5">container ≠ VM: many containers time-share one VM's Docker daemon</text>
+        </g>
+        <g class="node mv-node" data-key="worker2">
+          <rect x="420" y="470" width="340" height="260" rx="14" fill="#0f1318" stroke="#3fb950" stroke-width="2" stroke-dasharray="8 5"/>
+          <text x="590" y="496" text-anchor="middle" class="node-title" font-size="13">Worker VM 2 · Azure VMSS</text>
+          <rect x="445" y="515" width="290" height="65" rx="9" fill="#161b22" stroke="#3fb950"/>
+          <text x="590" y="542" text-anchor="middle" class="node-sub">NanoClaw runtime + Docker daemon</text>
+          <text x="590" y="560" text-anchor="middle" class="node-sub">long-polls queue → wakes on new lease</text>
+          <rect x="445" y="595" width="290" height="120" rx="9" fill="#161b22" stroke="#3fb950"/>
+          <text x="590" y="629" text-anchor="middle" class="node-sub">Disposable group containers · max 5/VM</text>
+          <text x="590" y="650" text-anchor="middle" class="node-sub">same lease → docker run → docker rm pattern as VM 1</text>
+          <text x="590" y="670" text-anchor="middle" class="node-sub" font-size="9.5">(slot usage varies independently per VM)</text>
+        </g>
+        <g class="node mv-node" data-key="workerN">
+          <rect x="800" y="470" width="340" height="260" rx="14" fill="#0f1318" stroke="#3fb950" stroke-width="2" stroke-dasharray="8 5"/>
+          <text x="970" y="496" text-anchor="middle" class="node-title" font-size="13">Worker VM N · Azure VMSS</text>
+          <rect x="825" y="515" width="290" height="65" rx="9" fill="#161b22" stroke="#3fb950"/>
+          <text x="970" y="542" text-anchor="middle" class="node-sub">NanoClaw runtime + Docker daemon</text>
+          <text x="970" y="560" text-anchor="middle" class="node-sub">long-polls queue → wakes on new lease</text>
+          <rect x="825" y="595" width="290" height="120" rx="9" fill="#161b22" stroke="#3fb950"/>
+          <text x="970" y="629" text-anchor="middle" class="node-sub">Disposable group containers · max 5/VM</text>
+          <text x="970" y="650" text-anchor="middle" class="node-sub">same lease → docker run → docker rm pattern as VM 1</text>
+          <text x="970" y="670" text-anchor="middle" class="node-sub" font-size="9.5">VM added/removed only when the pool as a whole saturates</text>
+        </g>
+
+        <!-- Band 4: shared durable storage, full width footer -->
+        <g class="node mv-node" data-key="storage">
+          <rect x="40" y="770" width="1340" height="110" rx="12" fill="#161b22" stroke="#d29922" stroke-width="2"/>
+          <text x="65" y="798" class="node-title">Shared durable storage</text>
+          <text x="65" y="818" class="node-sub">Azure Files (Premium SMB/NFS) or Azure NetApp Files, private endpoint</text>
+          <text x="65" y="836" class="node-sub">group workspaces · Claude session transcripts (JSONL) · IPC directories</text>
+          <text x="65" y="854" class="node-sub">any worker can pick up any group's files after acquiring its lease</text>
+        </g>
+
+
+
+        <!-- Feishu/Web -> queue/registry: each channel app resolves routing + publishes itself (no Ingress hop). Both boxes exit from the bottom edge into the clear gap between Band 1 and Band 2, then bend into Queue/Registry -- keeps the two channels' side-by-side boxes from crossing each other. -->
+        <path class="flow mv-flow" d="M480,230 L480,252 L630,252 L630,270" fill="none" stroke="#d29922" stroke-width="2.5" marker-end="url(#mvOrangeW)"/>
+        <path class="flow mv-flow" d="M620,230 L620,244 L990,244 L990,270" fill="none" stroke="#d29922" stroke-width="2" marker-end="url(#mvOrangeW)"/>
+        <path class="flow mv-flow" d="M760,230 L760,260 L700,260 L700,270" fill="none" stroke="#d29922" stroke-width="2.5" stroke-dasharray="5 3" marker-end="url(#mvOrangeW)"/>
+        <path class="flow mv-flow" d="M960,230 L960,236 L1120,236 L1120,270" fill="none" stroke="#d29922" stroke-width="2" stroke-dasharray="5 3" marker-end="url(#mvOrangeW)"/>
+        <text x="485" y="249" class="edge-label" font-size="10">Feishu: publish, direct</text>
+        <text x="705" y="257" class="edge-label" font-size="10">Web: publish, direct (dashed)</text>
+
+        <!-- Queue -> workers, orthogonal bus through a widened 390-470 corridor (kept well clear of the section label above and the box tops below) -->
+        <path class="flow mv-flow" d="M630,390 L630,425 L210,425 L210,470" fill="none" stroke="#79c0ff" stroke-width="2.5" marker-end="url(#mvCyanW)"/>
+        <path class="flow mv-flow" d="M630,390 L630,425 L590,425 L590,470" fill="none" stroke="#79c0ff" stroke-width="2.5" marker-end="url(#mvCyanW)"/>
+        <path class="flow mv-flow" d="M630,390 L630,425 L970,425 L970,470" fill="none" stroke="#79c0ff" stroke-width="2.5" marker-end="url(#mvCyanW)"/>
+        <text x="30" y="421" class="edge-label">long-poll (blocking receive) wakes worker</text>
+
+        <!-- Registry -> workers, second parallel bus, given its own row well below the queue bus -->
+        <path class="flow mv-flow" d="M1000,390 L1000,450 L235,450 L235,470" fill="none" stroke="#bc8cff" stroke-width="2" stroke-dasharray="3 4" marker-end="url(#mvPurpleW)"/>
+        <path class="flow mv-flow" d="M1000,390 L1000,450 L615,450 L615,470" fill="none" stroke="#bc8cff" stroke-width="2" stroke-dasharray="3 4" marker-end="url(#mvPurpleW)"/>
+        <path class="flow mv-flow" d="M1000,390 L1000,450 L995,450 L995,470" fill="none" stroke="#bc8cff" stroke-width="2" stroke-dasharray="3 4" marker-end="url(#mvPurpleW)"/>
+        <text x="1010" y="446" class="edge-label">lease TTL / session UUID</text>
+
+
+        <!-- Workers -> shared storage -->
+        <line class="flow mv-flow" x1="210" y1="730" x2="210" y2="770" stroke="#d29922" stroke-width="2" marker-end="url(#mvOrangeW)"/>
+        <line class="flow mv-flow" x1="590" y1="730" x2="590" y2="770" stroke="#d29922" stroke-width="2" marker-end="url(#mvOrangeW)"/>
+        <line class="flow mv-flow" x1="970" y1="730" x2="970" y2="770" stroke="#d29922" stroke-width="2" marker-end="url(#mvOrangeW)"/>
+        <text x="235" y="766" class="edge-label">read/write workspace, transcripts, IPC</text>
+      
+        <!-- Worker -> Feishu/Web directly: streamed reply path. Feishu enters via the clear left margin (x0-40, never crosses a box); Web now sits away from the margin, so its reply enters via the bottom edge through the same open gap the publish arrows use. Each channel app subscribes to its own pub/sub-by-conversation_id channel and relays events straight to its own pinned socket -- no separate Ingress relay hop. -->
+        <path class="flow mv-flow" d="M40,485 L14,485 L14,150 L260,150" fill="none" stroke="#3fb950" stroke-width="2.5" stroke-dasharray="2 3" marker-end="url(#mvGreenW)"/>
+        <path class="flow mv-flow" d="M1140,485 L1400,485 L1400,150 L1180,150" fill="none" stroke="#3fb950" stroke-width="2.5" stroke-dasharray="2 3" marker-end="url(#mvGreenW)"/>
+        <text x="18" y="145" class="edge-label" font-size="10">streamed reply (Redis Pub/Sub)</text>
+        <text x="1230" y="145" class="edge-label" font-size="10" text-anchor="end">streamed reply (Redis Pub/Sub)</text>
+      
+        <!-- Numbered walkthrough steps, drawn last so they sit on top of all boxes/arrows, placed in empty corners to avoid covering box text -->
+        <g class="step-marker"><circle cx="960" cy="90" r="15" fill="#f85149" stroke="#f0f6fc" stroke-width="2"/><text x="960" y="95" text-anchor="middle" font-size="15" font-weight="800" fill="#ffffff">1</text></g>
+        <g class="step-marker"><circle cx="960" cy="150" r="15" fill="#f85149" stroke="#f0f6fc" stroke-width="2"/><text x="960" y="155" text-anchor="middle" font-size="15" font-weight="800" fill="#ffffff">2</text></g>
+        <g class="step-marker"><circle cx="785" cy="285" r="15" fill="#f85149" stroke="#f0f6fc" stroke-width="2"/><text x="785" y="290" text-anchor="middle" font-size="15" font-weight="800" fill="#ffffff">3</text></g>
+        <g class="step-marker"><circle cx="1125" cy="285" r="15" fill="#f85149" stroke="#f0f6fc" stroke-width="2"/><text x="1125" y="290" text-anchor="middle" font-size="15" font-weight="800" fill="#ffffff">4</text></g>
+        <g class="step-marker"><circle cx="630" cy="425" r="15" fill="#f85149" stroke="#f0f6fc" stroke-width="2"/><text x="630" y="430" text-anchor="middle" font-size="15" font-weight="800" fill="#ffffff">5</text></g>
+        <g class="step-marker"><circle cx="355" cy="485" r="15" fill="#f85149" stroke="#f0f6fc" stroke-width="2"/><text x="355" y="490" text-anchor="middle" font-size="15" font-weight="800" fill="#ffffff">6</text></g>
+        <g class="step-marker"><circle cx="1300" cy="800" r="15" fill="#f85149" stroke="#f0f6fc" stroke-width="2"/><text x="1300" y="805" text-anchor="middle" font-size="15" font-weight="800" fill="#ffffff">7</text></g>
+        <g class="step-marker"><circle cx="1180" cy="150" r="15" fill="#f85149" stroke="#f0f6fc" stroke-width="2"/><text x="1180" y="155" text-anchor="middle" font-size="15" font-weight="800" fill="#ffffff">8</text></g>
+        <g class="step-marker"><circle cx="355" cy="715" r="15" fill="#f85149" stroke="#f0f6fc" stroke-width="2"/><text x="355" y="720" text-anchor="middle" font-size="15" font-weight="800" fill="#ffffff">9</text></g>
+      </svg>
+    </div>
+    <div class="steps-col">
+      <article class="card good"><h2>Steps 1–9: Web channel follow-up message</h2><ol>
+        <li><strong>Web channel box</strong> — the same logged-in browser sends a follow-up message over its still-open JWT-authenticated socket, later in the same conversation.</li>
+        <li><strong>Web channel box (its own ingress)</strong> — validates the JWT, then resolves the same <code>(channel=web, tenant_id=user_id, conversation_id)</code> key as the earlier message in this conversation and publishes directly to the queue (no separate Ingress hop).</li>
+        <li><strong>Queue</strong> — lands in the SAME Service Bus session as before — a session that is still open and exclusively locked by the worker that has been handling this conversation.</li>
+        <li><strong>Registry</strong> — the lease entry already shows this conversation's owning worker from the earlier message, still within its TTL — no new lease is created.</li>
+        <li><strong>Same worker, sticky session lock</strong> — identical mechanism to Feishu's follow-up case (Walkthrough 2, step 5): the worker's receiver has held an exclusive Service Bus lock on this session since the conversation started, kept alive by looping <code>ReceiveMessagesAsync()</code> + <code>RenewSessionLockAsync()</code> even through idle gaps. This message is just the next item that already-open loop picks up — no other worker's <code>AcceptNextSessionAsync()</code> call is ever offered this session while the lock holds.</li>
+        <li><strong>Container reuse (no docker run)</strong> — the worker finds its existing container for this group still running and forwards the new prompt to it over IPC, passing the conversation's ongoing Claude session UUID — no new container, no new slot consumed.</li>
+        <li><strong>Storage</strong> — the container appends to the SAME shared workspace/transcript/IPC directory as before; nothing about the file layout changes.</li>
+        <li><strong>Reply path (streamed, not one-shot)</strong> — same live event stream as Feishu — reasoning chunks, tool-call-started/result, partial text — flushed to IPC as they happen. The worker publishes each event to the same pub/sub-by-<code>conversation_id</code> channel; the subscriber is whichever Web-app replica registered <em>this user's</em> socket id at connect time — there's no separate Ingress process here either. That replica alone receives and relays the events, letting the web UI keep rendering incremental "typing" / tool-use indicators.</li>
+        <li><strong>Idle timer resets, no teardown this cycle</strong> — because a new message arrived before the 30-minute idle timeout fired, both the container and the sticky session lock stay alive, extending the window; teardown (and lock release) only happens if this conversation later goes quiet for a full 30 minutes.</li>
+      </ol></article>
+    </div>
+    </div>
+  
+    <h2 style="margin:28px 0 8px">Reference: rationale and Azure mapping</h2>
+    <div class="grid" style="margin-top:16px">
+      <article class="card risk"><h2>Why single-VM hits a ceiling</h2><p>Today's per-group queue lives in NanoClaw's own process memory, the session registry is a local SQLite file, group workspaces/transcripts/IPC live on the VM's disk, and there is exactly one Docker daemon and one copilot-api instance. None of that can be shared across a second VM without changes.</p></article>
+      <article class="card"><h2>What moves out of the process</h2><p>Three components get externalized: the <strong>queue</strong> (in-memory → Redis Streams/SQS/Service Bus), the <strong>session + lease registry</strong> (SQLite → Postgres/etcd), and <strong>durable storage</strong> (local disk → NFS/Azure Files/EFS mounted by every worker).</p></article>
+      <article class="card good"><h2>How does a later message in the same conversation reach the same worker (within the 30-min TTL)?</h2><p>This is enforced by Azure Service Bus's <strong>session lock</strong>, not by anything the worker or registry has to decide explicitly. Mechanically: an idle worker calls <code>AcceptNextSessionAsync()</code> (or <code>AcceptSessionAsync(id)</code>), which returns a session receiver bound to one specific <code>SessionId</code> (= the group key) — and the instant that call succeeds, Service Bus marks that <code>SessionId</code> exclusively locked server-side. The worker then loops <code>ReceiveMessagesAsync()</code> + <code>RenewSessionLockAsync()</code> on that same receiver continuously — even through gaps with nothing to receive — for as long as that group's container stays warm; the renewal calls are what keep the lock alive across idle periods, not the act of receiving itself. Because locked sessions are filtered out of the pool before being offered to anyone, any other worker's <code>AcceptNextSessionAsync()</code> call never even sees this session — so every subsequent message published to that <code>conversation_id</code>, arriving anywhere inside the 30-minute idle window, is simply the next item Worker A's already-running <code>ReceiveMessagesAsync()</code> call picks up — no new accept, no lookup. Nothing needs to look up "which worker had this conversation last": the queue itself is the source of truth for that. The registry's worker-lease field is a mirror of this fact (useful for dashboards/debugging and for the reply-pub/sub validity check), not the mechanism that enforces it. There are exactly two ways the lock lets go: (1) the worker explicitly calls <code>CloseAsync()</code> on the receiver at idle-teardown, releasing the lock immediately so any worker may accept it next, resulting in a cold <code>docker run</code>; or (2) the worker crashes and stops renewing, so the lock's TTL simply expires, after which a different worker accepts the now-unlocked session, finds no container running, and starts one fresh — resuming from the last saved Claude session UUID and transcript on shared storage, so no conversation state is lost even on a mid-conversation worker failure.</p></article>
+      <article class="card good"><h2>Shared storage vs. single-VM: what actually changes</h2><p>The directory <em>shape</em> is identical to today: one folder per group, containing the workspace files, the <code>.claude</code> JSONL transcript, and the IPC input/output directories — same paths, same file layout, same code in agent-runner and NanoClaw that reads/writes them. The only thing that changes is the <em>backing volume</em> that path resolves to: today it's the single VM's local disk, so only that one VM's Docker daemon and NanoClaw process can ever see it; in the multi-VM design it's an Azure Files/NetApp Files network mount mounted identically, at the identical path, by <em>every</em> worker VM. That's what makes the lease model work at all — when Worker 3 acquires a group's lease that Worker 1 handled an hour ago, it opens the exact same folder and sees the exact same transcript/workspace/IPC state, because "local disk" and "shared mount" are interchangeable from the application code's point of view. Nothing in agent-runner, the container, or the transcript/resume logic needs to know which VM it's running on.</p></article>
+      <article class="card good"><h2>IPC directories still needed — pub/sub sits downstream of them</h2><p>Yes, IPC directories don't go away, and their job doesn't change: a container is a separate process (and now separate filesystem namespace) from the worker, so writing new chat input into the group's IPC input directory and reading streamed output (reasoning chunks, tool calls, partial text) from its IPC output directory is still <em>how the worker and the container talk to each other at all</em> — same as single-VM today. What's new in the multi-VM design is what happens after a worker reads an event out of the IPC output directory: instead of the single host process forwarding it straight to the one Feishu WS connection it also owns, the worker publishes that event to the pub/sub channel keyed by <code>conversation_id</code>, so whichever channel-app replica owns the actual socket (which may be running on a completely different machine than this worker) receives it. So the full chain is <strong>container → IPC output directory (shared mount) → worker reads it → worker publishes to pub/sub → channel app relays to the socket</strong> — IPC handles the container↔worker handoff, pub/sub handles the worker↔channel-app handoff across the network. Neither replaces the other; they solve different halves of the same problem.</p></article>
+      <article class="card good"><h2>Which Azure service implements the reply pub/sub? Redis, not Service Bus</h2><p>It's Azure Cache for Redis's native <code>PUBLISH</code>/<code>SUBSCRIBE</code> commands — the same Redis instance already holding WS/socket-lease ownership records, not a second Service Bus. The two messaging needs are genuinely different shapes: the inbound <strong>queue</strong> needs durability and exactly-one-consumer, ordered-per-group delivery for chat messages that must never be dropped — that's what Service Bus sessions are built for. The reply <strong>fan-out</strong> needs the opposite: an ephemeral, fire-and-forget broadcast to whichever single replica currently holds a live socket for a given <code>conversation_id</code>, with channels created and torn down constantly as connections open/close — that's exactly Redis Pub/Sub's use case (the same pattern behind Socket.IO's and SignalR's Redis backplanes). Service Bus Topics could technically do fan-out too, but they're built for durable, pre-provisioned subscriptions, not millions of ad-hoc per-conversation channels — the wrong tool here. If the team later wants a fully managed alternative purpose-built for this exact "broadcast to whichever server owns this connection" problem, Azure Web PubSub is the dedicated PaaS option, but reusing Redis avoids adding a fourth stateful service to the design.</p></article>
+      <article class="card good"><h2>Group-to-worker leasing is the key invariant</h2><p>Exactly one worker may hold the lease for a group at a time (TTL-based, renewed while the container runs). This preserves the same guarantee NanoClaw relies on today — a group's JSONL transcript is only ever written by one process — while allowing any worker to pick up any group.</p></article>
+      <article class="card"><h2>Channel apps and copilot-api both scale independently (not pictured)</h2><p>Feishu and Web are each already a stateless-ish, horizontally scaled Container Apps app in their own right (Feishu pinned per-app-replica for its WS lease, Web fully stateless) — there's no separate ingress tier to scale as a third thing. copilot-api becomes a small replicated cluster reading the GitHub token from a shared secret store instead of one host file — omitted from the diagram since it's a supporting service every worker calls, not part of the core request path being illustrated.</p></article>
+      <article class="card good"><h2>Concrete Azure mapping</h2><p><strong>Feishu &amp; Web channel apps (each = its own ingress):</strong> Azure Container Apps behind Azure Front Door · <strong>Auth:</strong> Microsoft Entra External ID · <strong>Queue:</strong> Azure Service Bus (session-enabled) · <strong>Registry:</strong> Azure Cosmos DB (TTL leases) or Postgres Flexible Server · <strong>Workers:</strong> Azure VM Scale Sets — the one tier that stays IaaS, because Docker-in-Docker + Playwright/Chromium needs privileged, nested containers that Container Apps/AKS-without-privilege can't give it · <strong>copilot-api (not pictured):</strong> Azure Container Apps, secrets in Azure Key Vault · <strong>Storage:</strong> Azure Files Premium or Azure NetApp Files · <strong>WS/lease state + reply pub/sub:</strong> Azure Cache for Redis (key/value for lease ownership, native PUBLISH/SUBSCRIBE for the streamed reply fan-out — not Service Bus, which is reserved for the durable inbound work queue).</p></article>
+      <article class="card warning"><h2>Failure handling</h2><p>If a worker VM dies mid-run, its leases expire on TTL and any other worker can resume the affected groups from the shared session registry and shared storage — the same stale-session recovery path NanoClaw already has, extended across hosts instead of just across container restarts.</p></article>
+      <article class="card"><h2>How a worker wakes up</h2><p>No polling loop: each idle worker keeps a blocking receive call open against its Service Bus session queue, so the SDK call itself returns the instant a new message is available — the OS/network stack does the waiting, not a CPU spin. The worker then acquires the group's lease in the registry (so no other worker double-processes it) and dequeues the message in the same step.</p></article>
+      <article class="card"><h2>How the system decides to add or remove VMs</h2><p>Azure Monitor autoscale (or KEDA) watches one ratio — queue depth ÷ total pool container capacity (workers × 5 slots each) — as a custom metric on the Service Bus queue. Cross a high-water threshold for a sustained window (e.g. pool-wide slot utilization &gt;90% for 2 minutes) and it adds VMSS instances; the new instance just needs to boot and start long-polling, so it's already receiving work within seconds. Scale-in is intentionally more cautious: an instance is only marked for removal once the registry shows it holds zero active leases (zero running containers), so autoscale never kills a VM mid-run — it waits for that worker to go idle first.</p></article>
+      <article class="card good"><h2>Two scaling layers, two speeds</h2><p><strong>Container-level (inside one VM):</strong> the instant a worker acquires a group's lease it runs <code>docker run</code> for that group — sub-second, purely local, no autoscaler involved — up to that VM's own concurrency limit (5 concurrent containers, matching today's single-VM limit). When a group goes idle, <code>docker rm</code> frees that slot for the next lease. <strong>VM-level (across the pool):</strong> the autoscaler never looks at one VM's slot count — it only reacts when <em>most/all</em> VMs are near their own limit at the same time, meaning the whole pool, not any one VM, is out of room. That's a slower, minutes-scale decision (boot a new VM) versus the container layer's sub-second one. Concretely: five simultaneous group requests to an idle worker never trigger autoscale (it just fills its own 5 slots); a sixth simultaneous request pool-wide, with every worker already full, is what actually adds a VM.</p></article>
+      <article class="card"><h2>What stays the same</h2><p>Per-group isolation (one folder, one session UUID, one IPC namespace), the container image and its trust boundaries, and the idle-timeout/cleanup lifecycle are unchanged — they just now apply per-worker instead of per-VM.</p></article>
+      <article class="card good"><h2>Multi-tenant sharding generalizes to one key</h2><p>The fix for the single-Feishu-app rate-limit ceiling and the fix for adding a Web channel are the <em>same</em> change: generalize group identity to <code>(channel_type, tenant_id, conversation_id)</code> everywhere — each channel app's own routing resolution, queue partition key, and the lease registry's composite key. Feishu shards by <code>app_id</code> (many users share one bot's quota); Web shards by <code>user_id</code> (each login is already its own boundary). Workers, containers, and shared storage don't need to know the difference.</p></article>
+      <article class="card"><h2>Web channel changes the ingress and trust story</h2><p>Feishu's bottleneck is external and stateful (one leased WS connection per app serving many users). Web has no external quota, but needs a component NanoClaw doesn't have today: its own Auth/Identity Service, since Feishu supplies user identity for free and a browser login doesn't. Web also simplifies the container trust boundary — there's no external chat-platform credential to inject into a Web-originated container, since replies just flow back through IPC → the worker → pub/sub → straight to the Web app's own socket (no separate ingress hop in between).</p></article>
+    </div>

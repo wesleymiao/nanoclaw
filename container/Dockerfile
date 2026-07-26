@@ -59,8 +59,10 @@ RUN npx playwright install chromium && chmod -R a+rx /opt/playwright-browsers
 
 # Fix crashpad handler crash in container env — replace with no-op
 # The bundled chromium's crashpad handler fails in Docker (no crash reporting needed)
-RUN printf '#!/bin/bash\nexit 0\n' > /opt/playwright-browsers/chromium-1217/chrome-linux64/chrome_crashpad_handler \
-    && chmod +x /opt/playwright-browsers/chromium-1217/chrome-linux64/chrome_crashpad_handler
+# Resolved dynamically since the chromium-<rev> directory name changes with the playwright version
+RUN handler="$(find /opt/playwright-browsers -path '*/chrome-linux64/chrome_crashpad_handler')" \
+    && printf '#!/bin/bash\nexit 0\n' > "$handler" \
+    && chmod +x "$handler"
 
 # Create app directory
 WORKDIR /app

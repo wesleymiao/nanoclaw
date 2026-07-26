@@ -1,0 +1,4 @@
+# Shell scripts must keep LF line endings so they run correctly under
+# WSL/Linux (e.g. container/build.sh, used by the Tier 1 e2e harness),
+# even when checked out on Windows with core.autocrlf enabled.
+*.sh text eol=lf
