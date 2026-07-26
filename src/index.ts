@@ -214,6 +214,30 @@ export function _setRegisteredGroups(
   registeredGroups = groups;
 }
 
+// Persist an outbound (bot) reply into the messages table so it survives
+// process restarts and channel logout/login (e.g. WebChannel's
+// /api/history, which reads exclusively from this table — nothing else
+// remembers the bot's own replies once they've left this process). Used
+// both for the final agent answer (processGroupMessages, below) and for
+// verbose/intermediate messages relayed via the IPC watcher and scheduler
+// loop (see bootstrapApp()'s sendMessage wrappers). is_bot_message=true
+// keeps it excluded from getNewMessages()/getMessagesSince() (the inbound
+// message loop), preventing the bot from re-triggering itself on its own
+// output.
+function recordOutboundMessage(jid: string, msgId: string, text: string): void {
+  if (!registeredGroups[jid]) return;
+  storeMessage({
+    id: msgId,
+    chat_jid: jid,
+    sender: ASSISTANT_NAME,
+    sender_name: ASSISTANT_NAME,
+    content: text,
+    timestamp: new Date().toISOString(),
+    is_from_me: true,
+    is_bot_message: true,
+  });
+}
+
 /**
  * Process all pending messages for a group.
  * Called by the GroupQueue when it's this group's turn.
@@ -311,7 +335,8 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
           },
           'Sending agent output to channel',
         );
-        await channel.sendMessage(chatJid, text);
+        const msgId = await channel.sendMessage(chatJid, text);
+        if (msgId) recordOutboundMessage(chatJid, msgId, text);
         outputSentToUser = true;
       }
       // Only reset idle timer on actual results, not session-update markers (result: null)
@@ -747,26 +772,6 @@ export async function bootstrapApp(): Promise<BootstrappedApp> {
   const lastMessageIds = new Map<string, string>();
 
   // Persist an outbound (bot) reply into the messages table so it survives
-  // process restarts and channel logout/login (e.g. WebChannel's
-  // /api/history, which reads exclusively from this table — nothing else
-  // remembers the bot's own replies once they've left this process).
-  // is_bot_message=true keeps it excluded from getNewMessages/
-  // getMessagesSince (the inbound message loop), preventing the bot from
-  // re-triggering itself on its own output.
-  function recordOutboundMessage(jid: string, msgId: string, text: string): void {
-    if (!registeredGroups[jid]) return;
-    storeMessage({
-      id: msgId,
-      chat_jid: jid,
-      sender: ASSISTANT_NAME,
-      sender_name: ASSISTANT_NAME,
-      content: text,
-      timestamp: new Date().toISOString(),
-      is_from_me: true,
-      is_bot_message: true,
-    });
-  }
-
   // Start subsystems (independently of connection handler)
   startSchedulerLoop({
     registeredGroups: () => registeredGroups,
