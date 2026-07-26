@@ -746,6 +746,27 @@ export async function bootstrapApp(): Promise<BootstrappedApp> {
   // Track last message_id sent per chat (for reminder re-check scheduling)
   const lastMessageIds = new Map<string, string>();
 
+  // Persist an outbound (bot) reply into the messages table so it survives
+  // process restarts and channel logout/login (e.g. WebChannel's
+  // /api/history, which reads exclusively from this table — nothing else
+  // remembers the bot's own replies once they've left this process).
+  // is_bot_message=true keeps it excluded from getNewMessages/
+  // getMessagesSince (the inbound message loop), preventing the bot from
+  // re-triggering itself on its own output.
+  function recordOutboundMessage(jid: string, msgId: string, text: string): void {
+    if (!registeredGroups[jid]) return;
+    storeMessage({
+      id: msgId,
+      chat_jid: jid,
+      sender: ASSISTANT_NAME,
+      sender_name: ASSISTANT_NAME,
+      content: text,
+      timestamp: new Date().toISOString(),
+      is_from_me: true,
+      is_bot_message: true,
+    });
+  }
+
   // Start subsystems (independently of connection handler)
   startSchedulerLoop({
     registeredGroups: () => registeredGroups,
@@ -762,7 +783,10 @@ export async function bootstrapApp(): Promise<BootstrappedApp> {
       const text = formatOutbound(rawText);
       if (text) {
         const msgId = await channel.sendMessage(jid, text);
-        if (msgId) lastMessageIds.set(jid, msgId);
+        if (msgId) {
+          lastMessageIds.set(jid, msgId);
+          recordOutboundMessage(jid, msgId, text);
+        }
         return msgId;
       }
     },
@@ -773,7 +797,10 @@ export async function bootstrapApp(): Promise<BootstrappedApp> {
       const channel = findChannel(channels, jid);
       if (!channel) throw new Error(`No channel for JID: ${jid}`);
       const msgId = await channel.sendMessage(jid, text);
-      if (msgId) lastMessageIds.set(jid, msgId);
+      if (msgId) {
+        lastMessageIds.set(jid, msgId);
+        recordOutboundMessage(jid, msgId, text);
+      }
       return msgId;
     },
     registeredGroups: () => registeredGroups,
